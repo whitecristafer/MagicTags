@@ -1,233 +1,194 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
+using System.Globalization;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Oxide.Core;
-using Oxide.Core.Plugins;
 using UnityEngine;
-using Oxide.Core.Libraries;
 
 namespace Oxide.Plugins
 {
-    [Info("MagicTags", "whitecristafer", "1.0.0")]
-    [Description("Prefix management for IQPermissions, TimedPermissions, Oxide Groups. " +
-                 "Developer whitecristafer sponsored by infunv.ru for evolve.infunv.ru. Open‑source.")]
+    [Info("MagicTags", "whitecristafer", "2.0.0")]
+    [Description("MagicTags 2.0.0 - overhead prefix radar with chat prefixes, custom colors and RU/EN localization.")]
     public class MagicTags : RustPlugin
     {
-        #region Constants & Permissions
+        private const ulong PluginIcon = 76561198209258869;
+        private const string ChatPrefix = "<size=12><color=#cc66ff><b>MagicTags</b></color></size> |";
 
-        private const string PluginPrefix = "MagicPrefix";
-        private const string UpdateSourceUrl = "https://raw.githubusercontent.com/whitecristafer/MagicTags/main/MagicTags.cs";
-        private const string PermissionManage = "magictags.manage";
-        private const string PermissionReload = "magictags.reload";
-        private const string PermissionPersonal = "magictags.personal";
-        private const string PermissionInfo = "magictags.info";
+        private const string PermAdmin = "magictags.admin";
+        private const string PermSee = "magictags.see";
+        private const string PermHide = "magictags.hide";
+        private const string PermCustomPrefix = "magictags.customprefix";
+        private const string PermCustomColor = "magictags.customcolor";
+        private const string PermPersonal = "magictags.personal";
+        private const string PermReload = "magictags.reload";
+        private const string PermManage = "magictags.manage";
+
         private const string DataFileName = "MagicTags_Data";
 
-        #endregion
+        private PluginConfig _config;
+        private StoredData _data;
 
-        #region Configuration
+        private Timer _refreshTimer;
+        private readonly HashSet<ulong> _temporaryAdminFlags = new HashSet<ulong>();
 
-        private Configuration _config;
+        #region Config
 
-        public class Configuration
+        private class PluginConfig
         {
-            [JsonProperty("General")]
-            public GeneralSettings General = new GeneralSettings();
-
-            [JsonProperty("Default Prefix")]
-            public DefaultPrefixSettings DefaultPrefix = new DefaultPrefixSettings();
-
-            [JsonProperty("Prefixes")]
-            public List<PrefixEntry> Prefixes = new List<PrefixEntry>();
-
-            public static Configuration CreateDefault()
-            {
-                return new Configuration
-                {
-                    General = new GeneralSettings
-                    {
-                        UpdateInterval = 0.5f,
-                        MaxDisplayNameLength = 32,
-                        ShowOverheadToSelf = false,
-                        LogDebug = false
-                    },
-                    DefaultPrefix = new DefaultPrefixSettings
-                    {
-                        Enabled = true,
-                        OverheadPrefix = "[Player]",
-                        OverheadPrefixColor = "#a0a0a0",
-                        OverheadNameColor = "#ffffff",
-                        ChatPrefix = "",
-                        ChatPrefixColor = "#ffffff"
-                    },
-                    Prefixes = new List<PrefixEntry>
-                    {
-                        new PrefixEntry
-                        {
-                            Key = "admin",
-                            PermissionSuffix = "admin",
-                            Type = PermissionType.Permission,
-                            Enabled = true,
-                            Priority = 100,
-                            OverheadPrefix = "[Admin]",
-                            OverheadPrefixColor = "#ff4444",
-                            OverheadNameColor = "#ffffff",
-                            ChatPrefix = "[Admin]",
-                            ChatPrefixColor = "#ff4444"
-                        },
-                        new PrefixEntry
-                        {
-                            Key = "moderator",
-                            PermissionSuffix = "moderator",
-                            Type = PermissionType.Permission,
-                            Enabled = true,
-                            Priority = 50,
-                            OverheadPrefix = "[Mod]",
-                            OverheadPrefixColor = "#44ff44",
-                            OverheadNameColor = "#ffffff",
-                            ChatPrefix = "[Mod]",
-                            ChatPrefixColor = "#44ff44"
-                        }
-                    }
-                };
-            }
+            [JsonProperty("Settings")]
+            public SettingsConfig Settings = new SettingsConfig();
         }
 
-        public class GeneralSettings
+        private class SettingsConfig
         {
+            [JsonProperty("Enabled")]
+            public bool Enabled = true;
+
             [JsonProperty("Update interval (seconds)")]
             public float UpdateInterval = 0.5f;
 
-            [JsonProperty("Max display name length (characters)")]
-            public int MaxDisplayNameLength = 32;
+            [JsonProperty("View distance (meters)")]
+            public float ViewDistance = 60f;
 
-            [JsonProperty("Show overhead prefix to self")]
-            public bool ShowOverheadToSelf = false;
+            [JsonProperty("Text lifetime (seconds)")]
+            public float TextLifetime = 0.75f;
 
-            [JsonProperty("Log debug info")]
+            [JsonProperty("Text height offset")]
+            public float TextHeight = 0.80f;
+
+            [JsonProperty("Show tags to self")]
+            public bool ShowSelf = false;
+
+            [JsonProperty("Show only for permission")]
+            public bool ShowOnlyForPermission = true;
+
+            [JsonProperty("Require admin flag for radar mode")]
+            public bool RequireAdminFlagForRadarMode = true;
+
+            [JsonProperty("Use team prefix")]
+            public bool UseTeamPrefix = true;
+
+            [JsonProperty("Default prefix text")]
+            public string DefaultPrefixText = "[PLAYER]";
+
+            [JsonProperty("Default prefix color")]
+            public string DefaultPrefixColor = "#cfcfcf";
+
+            [JsonProperty("Admin prefix text")]
+            public string AdminPrefixText = "[ADMIN]";
+
+            [JsonProperty("Admin prefix color")]
+            public string AdminPrefixColor = "#ff66ff";
+
+            [JsonProperty("Team prefix text")]
+            public string TeamPrefixText = "[TEAM]";
+
+            [JsonProperty("Team prefix color")]
+            public string TeamPrefixColor = "#66ccff";
+
+            [JsonProperty("Custom prefix color default")]
+            public string CustomPrefixColor = "#ff66cc";
+
+            [JsonProperty("Log debug")]
             public bool LogDebug = false;
         }
 
-        public class DefaultPrefixSettings
+        protected override void LoadDefaultConfig()
         {
-            [JsonProperty("Enabled")]
-            public bool Enabled = true;
-
-            [JsonProperty("Overhead prefix")]
-            public string OverheadPrefix = "[Player]";
-
-            [JsonProperty("Overhead prefix color")]
-            public string OverheadPrefixColor = "#a0a0a0";
-
-            [JsonProperty("Overhead name color")]
-            public string OverheadNameColor = "#ffffff";
-
-            [JsonProperty("Chat prefix")]
-            public string ChatPrefix = "";
-
-            [JsonProperty("Chat prefix color")]
-            public string ChatPrefixColor = "#ffffff";
+            _config = new PluginConfig();
         }
-
-        public enum PermissionType
-        {
-            Permission,
-            Group
-        }
-
-        public class PrefixEntry
-        {
-            [JsonProperty("Key")]
-            public string Key = "admin";
-
-            [JsonProperty("Permission / Group suffix")]
-            public string PermissionSuffix = "admin";
-
-            [JsonProperty("Type")]
-            public PermissionType Type = PermissionType.Permission;
-
-            [JsonProperty("Enabled")]
-            public bool Enabled = true;
-
-            [JsonProperty("Priority")]
-            public int Priority = 0;
-
-            [JsonProperty("Overhead prefix")]
-            public string OverheadPrefix = "";
-
-            [JsonProperty("Overhead prefix color")]
-            public string OverheadPrefixColor = "#ffffff";
-
-            [JsonProperty("Overhead name color")]
-            public string OverheadNameColor = "#ffffff";
-
-            [JsonProperty("Chat prefix")]
-            public string ChatPrefix = "";
-
-            [JsonProperty("Chat prefix color")]
-            public string ChatPrefixColor = "#ffffff";
-        }
-
-        protected override void LoadDefaultConfig() => _config = Configuration.CreateDefault();
 
         protected override void LoadConfig()
         {
             base.LoadConfig();
             try
             {
-                _config = Config.ReadObject<Configuration>();
-                if (_config == null) throw new Exception();
+                _config = Config.ReadObject<PluginConfig>();
             }
             catch
             {
-                PrintWarning(Lang("ConfigCorrupted"));
-                LoadDefaultConfig();
+                PrintWarning("MagicTags config was corrupted, creating a new one.");
+                _config = null;
             }
+
+            if (_config == null) _config = new PluginConfig();
+            NormalizeConfig();
             SaveConfig();
         }
 
-        protected override void SaveConfig() => Config.WriteObject(_config, true);
+        protected override void SaveConfig()
+        {
+            Config.WriteObject(_config, true);
+        }
+
+        private void NormalizeConfig()
+        {
+            if (_config == null) _config = new PluginConfig();
+            if (_config.Settings == null) _config.Settings = new SettingsConfig();
+
+            _config.Settings.UpdateInterval = Mathf.Clamp(_config.Settings.UpdateInterval, 0.1f, 10f);
+            _config.Settings.ViewDistance = Mathf.Clamp(_config.Settings.ViewDistance, 1f, 500f);
+            _config.Settings.TextLifetime = Mathf.Clamp(_config.Settings.TextLifetime, 0.1f, 10f);
+            _config.Settings.TextHeight = Mathf.Clamp(_config.Settings.TextHeight, 0.1f, 20f);
+            _config.Settings.DefaultPrefixColor = NormalizeHex(_config.Settings.DefaultPrefixColor, "#cfcfcf");
+            _config.Settings.AdminPrefixColor = NormalizeHex(_config.Settings.AdminPrefixColor, "#ff66ff");
+            _config.Settings.TeamPrefixColor = NormalizeHex(_config.Settings.TeamPrefixColor, "#66ccff");
+            _config.Settings.CustomPrefixColor = NormalizeHex(_config.Settings.CustomPrefixColor, "#ff66cc");
+        }
 
         #endregion
 
-        #region Data (Personal Prefixes)
+        #region Data
 
-        private StoredData _data;
-
-        public class StoredData
+        private class StoredData
         {
-            public Dictionary<ulong, PersonalPrefix> PersonalPrefixes = new Dictionary<ulong, PersonalPrefix>();
+            public Dictionary<ulong, PlayerProfile> Players = new Dictionary<ulong, PlayerProfile>();
         }
 
-        public class PersonalPrefix
+        private class PlayerProfile
         {
-            public bool Enabled = true;
-            public string OverheadPrefix = "";
-            public string OverheadPrefixColor = "#ffffff";
-            public string OverheadNameColor = "#ffffff";
-            public string ChatPrefix = "";
-            public string ChatPrefixColor = "#ffffff";
-            public string UpdatedBy = "";
-            public string UpdatedAt = "";
+            public bool Hidden;
+            public string CustomPrefix = string.Empty;
+            public string CustomPrefixColor = string.Empty;
+            public string UpdatedBy = string.Empty;
+            public string UpdatedAt = string.Empty;
         }
 
         private void LoadData()
         {
             try
             {
-                _data = Interface.Oxide.DataFileSystem.ReadObject<StoredData>(DataFileName) ?? new StoredData();
+                _data = Interface.Oxide.DataFileSystem.ReadObject<StoredData>(DataFileName);
             }
             catch
             {
-                _data = new StoredData();
+                _data = null;
             }
+
+            if (_data == null) _data = new StoredData();
+            if (_data.Players == null) _data.Players = new Dictionary<ulong, PlayerProfile>();
         }
 
-        private void SaveData() => Interface.Oxide.DataFileSystem.WriteObject(DataFileName, _data);
+        private void SaveData()
+        {
+            Interface.Oxide.DataFileSystem.WriteObject(DataFileName, _data);
+        }
+
+        private PlayerProfile GetOrCreateProfile(ulong userId)
+        {
+            if (_data.Players == null)
+                _data.Players = new Dictionary<ulong, PlayerProfile>();
+
+            if (!_data.Players.TryGetValue(userId, out var profile) || profile == null)
+            {
+                profile = new PlayerProfile();
+                _data.Players[userId] = profile;
+            }
+
+            return profile;
+        }
 
         #endregion
 
@@ -237,505 +198,468 @@ namespace Oxide.Plugins
         {
             lang.RegisterMessages(new Dictionary<string, string>
             {
-                ["Prefix"] = $"<color=#00bfff>[{PluginPrefix}]</color>",
-                ["NoPermission"] = "{0} You don't have permission to use this command.",
-                ["Help"] = "<size=14><color=#00bfff>MagicTags</color></size> by <color=#ffaa00>whitecristafer</color>\n" +
-                           "/magictags help - Show this help\n" +
-                           "/magictags info - Plugin information\n" +
-                           "/magictags list [page] - List configured prefixes\n" +
-                           "/magictags add <key> <permissionSuffix> [type:perm/group] - Add prefix\n" +
-                           "/magictags set <key> <field> <value> - Modify prefix\n" +
-                           "/magictags remove <key> - Remove prefix\n" +
-                           "/magictags personal <set|clear|info|color> <player|steamid> [value] - Personal prefix\n" +
-                           "/magictags reload - Reload configuration\n" +
-                           "/magictags sync - Force refresh all players",
-                ["Info"] = "MagicTags v{0}\nDeveloper whitecristafer | infunv.ru | evolve.infunv.ru\n" +
-                           "Prefixes: {1} total, {2} enabled | Personal: {3}\n" +
-                           "Update interval: {4}s | Max name length: {5}",
-                ["PrefixList"] = "Prefixes page {0}/{1}:",
-                ["PrefixEntry"] = "  {0}. key={1} perm={2} enabled={3} priority={4} overhead='{5}' chat='{6}'",
-                ["Added"] = "Prefix '{0}' added.",
-                ["Removed"] = "Prefix '{0}' removed.",
-                ["Updated"] = "Prefix '{0}' updated.",
-                ["NotFound"] = "Prefix '{0}' not found.",
-                ["Exists"] = "Prefix '{0}' already exists.",
-                ["PersonalSet"] = "Personal prefix set for {0}.",
-                ["PersonalCleared"] = "Personal prefix removed for {0}.",
-                ["PersonalInfo"] = "Personal prefix for {0}: enabled={1}, overhead='{2}', chat='{3}', by={4}, at={5}.",
-                ["Reloaded"] = "Configuration reloaded.",
+                ["Prefix"] = ChatPrefix,
+                ["NoPermission"] = "You don't have permission to use this command.",
+                ["PluginDisabled"] = "MagicTags is disabled in config.",
+                ["Help"] = "MagicTags commands:\n" +
+                           "/mtags info - plugin info\n" +
+                           "/mtags hide - hide your tag\n" +
+                           "/mtags show - show your tag\n" +
+                           "/mtags prefix <text> - set your custom prefix\n" +
+                           "/mtags color <#hex> - set your custom prefix color\n" +
+                           "/mtags clear - clear your custom prefix\n" +
+                           "/mtags personal <set|color|clear|hide|show|info> <player> [value] - admin tools\n" +
+                           "/mtags sync - refresh all players\n" +
+                           "/mtags reload - reload config and data",
+                ["Info"] = "MagicTags v{0}\nPlayers with data: {1}\nUpdate interval: {2}s\nView distance: {3}m",
+                ["Reloaded"] = "MagicTags reloaded.",
                 ["Synced"] = "All players refreshed.",
-                ["ConfigCorrupted"] = "Configuration file corrupted, creating default.",
-                ["UpdateCheckStart"] = "Checking for updates...",
-                ["UpdateCurrent"] = "You already have the latest version ({0}).",
-                ["UpdateAvailable"] = "New version {1} available (current {0}). Downloading...",
-                ["UpdateDownloaded"] = "Update downloaded and applied. Plugin will reload.",
-                ["UpdateFailed"] = "Update check failed.",
-                ["ChatFormat"] = "{0}{1}: {2}"
+                ["HiddenOn"] = "Your tag is now hidden.",
+                ["HiddenOff"] = "Your tag is now visible.",
+                ["PrefixSet"] = "Custom prefix saved: {0}",
+                ["ColorSet"] = "Custom color saved: {0}",
+                ["Cleared"] = "Custom prefix data cleared.",
+                ["InvalidColor"] = "Invalid hex color. Example: #ff66cc",
+                ["InvalidUsage"] = "Invalid usage.",
+                ["PlayerNotFound"] = "Player not found.",
+                ["PersonalSet"] = "Custom prefix set for {0}.",
+                ["PersonalColor"] = "Custom color set for {0}.",
+                ["PersonalHidden"] = "Hidden state changed for {0}.",
+                ["PersonalCleared"] = "Custom data cleared for {0}.",
+                ["PersonalInfo"] = "Player {0}: hidden={1}, prefix='{2}', color='{3}', updated_by={4}, updated_at={5}",
+                ["CurrentState"] = "Hidden={0}, Prefix='{1}', Color='{2}'",
+                ["CommandDenied"] = "You need the required permission for this action.",
+                ["TeamPrefixNotice"] = "Team tag is enabled by config.",
             }, this, "en");
 
             lang.RegisterMessages(new Dictionary<string, string>
             {
-                ["Prefix"] = $"<color=#00bfff>[{PluginPrefix}]</color>",
-                ["NoPermission"] = "{0} У вас нет прав на использование этой команды.",
-                ["Help"] = "<size=14><color=#00bfff>MagicTags</color></size> от <color=#ffaa00>whitecristafer</color>\n" +
-                           "/magictags help - Показать справку\n" +
-                           "/magictags info - Информация о плагине\n" +
-                           "/magictags list [страница] - Список префиксов\n" +
-                           "/magictags add <ключ> <суффикс> [тип:perm/group] - Добавить префикс\n" +
-                           "/magictags set <ключ> <поле> <значение> - Изменить префикс\n" +
-                           "/magictags remove <ключ> - Удалить префикс\n" +
-                           "/magictags personal <set|clear|info|color> <игрок|steamid> [значение] - Личный префикс\n" +
-                           "/magictags reload - Перезагрузить конфигурацию\n" +
-                           "/magictags sync - Принудительно обновить всех игроков",
-                ["Info"] = "MagicTags v{0}\nРазработчик whitecristafer | infunv.ru | evolve.infunv.ru\n" +
-                           "Префиксов: {1} всего, {2} включено | Личных: {3}\n" +
-                           "Интервал обновления: {4}с | Макс. длина имени: {5}",
-                ["PrefixList"] = "Префиксы, страница {0}/{1}:",
-                ["PrefixEntry"] = "  {0}. ключ={1} права={2} вкл={3} приоритет={4} над головой='{5}' чат='{6}'",
-                ["Added"] = "Префикс '{0}' добавлен.",
-                ["Removed"] = "Префикс '{0}' удалён.",
-                ["Updated"] = "Префикс '{0}' обновлён.",
-                ["NotFound"] = "Префикс '{0}' не найден.",
-                ["Exists"] = "Префикс '{0}' уже существует.",
-                ["PersonalSet"] = "Личный префикс для {0} установлен.",
-                ["PersonalCleared"] = "Личный префикс для {0} удалён.",
-                ["PersonalInfo"] = "Личный префикс для {0}: включён={1}, над головой='{2}', чат='{3}', кем={4}, когда={5}.",
-                ["Reloaded"] = "Конфигурация перезагружена.",
+                ["Prefix"] = ChatPrefix,
+                ["NoPermission"] = "У вас нет прав на использование этой команды.",
+                ["PluginDisabled"] = "MagicTags выключен в конфиге.",
+                ["Help"] = "Команды MagicTags:\n" +
+                           "/mtags info - информация о плагине\n" +
+                           "/mtags hide - скрыть свой тег\n" +
+                           "/mtags show - показать свой тег\n" +
+                           "/mtags prefix <текст> - установить свой префикс\n" +
+                           "/mtags color <#hex> - установить цвет префикса\n" +
+                           "/mtags clear - очистить свой префикс\n" +
+                           "/mtags personal <set|color|clear|hide|show|info> <игрок> [значение] - админка\n" +
+                           "/mtags sync - обновить всех игроков\n" +
+                           "/mtags reload - перезагрузить конфиг и данные",
+                ["Info"] = "MagicTags v{0}\nИгроков с данными: {1}\nИнтервал обновления: {2}с\nДальность отображения: {3}м",
+                ["Reloaded"] = "MagicTags перезагружен.",
                 ["Synced"] = "Все игроки обновлены.",
-                ["ConfigCorrupted"] = "Файл конфигурации повреждён, создан новый.",
-                ["UpdateCheckStart"] = "Проверка обновлений...",
-                ["UpdateCurrent"] = "У вас уже последняя версия ({0}).",
-                ["UpdateAvailable"] = "Доступна новая версия {1} (текущая {0}). Загрузка...",
-                ["UpdateDownloaded"] = "Обновление загружено и применено. Плагин перезагрузится.",
-                ["UpdateFailed"] = "Проверка обновлений не удалась.",
-                ["ChatFormat"] = "{0}{1}: {2}"
+                ["HiddenOn"] = "Тег теперь скрыт.",
+                ["HiddenOff"] = "Тег теперь виден.",
+                ["PrefixSet"] = "Префикс сохранён: {0}",
+                ["ColorSet"] = "Цвет сохранён: {0}",
+                ["Cleared"] = "Префикс очищен.",
+                ["InvalidColor"] = "Неверный hex-цвет. Пример: #ff66cc",
+                ["InvalidUsage"] = "Неверное использование.",
+                ["PlayerNotFound"] = "Игрок не найден.",
+                ["PersonalSet"] = "Префикс установлен для {0}.",
+                ["PersonalColor"] = "Цвет установлен для {0}.",
+                ["PersonalHidden"] = "Статус скрытия изменён для {0}.",
+                ["PersonalCleared"] = "Данные очищены для {0}.",
+                ["PersonalInfo"] = "Игрок {0}: hidden={1}, prefix='{2}', color='{3}', updated_by={4}, updated_at={5}",
+                ["CurrentState"] = "Hidden={0}, Prefix='{1}', Color='{2}'",
+                ["CommandDenied"] = "Для этого действия нужны права.",
+                ["TeamPrefixNotice"] = "Командный тег включён в конфиге.",
             }, this, "ru");
         }
 
-        private string Lang(string key, string playerId = null, params object[] args) =>
-            string.Format(lang.GetMessage(key, this, playerId ?? "0"), args);
-
-        #endregion
-
-        #region Messaging
-
-        private void Message(object receiver, string key, params object[] args)
+        private string Lang(string key, string playerId = null, params object[] args)
         {
-            string msg = Lang(key, (receiver as BasePlayer)?.UserIDString, args);
-            string prefix = Lang("Prefix", (receiver as BasePlayer)?.UserIDString);
-            if (receiver is BasePlayer player)
-                player.ChatMessage($"{prefix} {msg}");
-            else
-                Puts($"{prefix} {msg}");
-        }
-
-        private void DebugLog(string message)
-        {
-            if (_config?.General.LogDebug ?? false)
-                Puts($"[MagicTags][DEBUG] {message}");
+            return string.Format(lang.GetMessage(key, this, playerId ?? "0"), args);
         }
 
         #endregion
 
-        #region Auto Update
-
-        private static DateTime _lastUpdateCheck = DateTime.MinValue;
-        private bool _updateReloadScheduled;
-
-        private void PrintStartupBanner()
-        {
-            Puts("============================================================");
-            Puts($"  MagicTags v{Version} by whitecristafer");
-            Puts("  infunv.ru | evolve.infunv.ru");
-            Puts("  Open‑source: https://github.com/whitecristafer/MagicTags");
-            Puts("============================================================");
-        }
-
-        private void CheckForUpdates()
-        {
-            if ((DateTime.Now - _lastUpdateCheck).TotalSeconds < 60)
-                return;
-
-            Puts(Lang("UpdateCheckStart"));
-            webrequest.Enqueue(UpdateSourceUrl, null, (code, response) =>
-            {
-                if (code != 200 || string.IsNullOrWhiteSpace(response))
-                {
-                    Puts(Lang("UpdateFailed"));
-                    return;
-                }
-
-                string remoteVersionStr = ExtractVersion(response);
-                if (string.IsNullOrWhiteSpace(remoteVersionStr) || !IsStableVersion(remoteVersionStr))
-                {
-                    Puts(Lang("UpdateFailed"));
-                    return;
-                }
-
-                if (!IsStableVersion(Version.ToString()) || CompareVersions(remoteVersionStr, Version.ToString()) <= 0)
-                {
-                    Puts(Lang("UpdateCurrent", null, Version));
-                    return;
-                }
-
-                Puts(Lang("UpdateAvailable", null, Version, remoteVersionStr));
-                SaveUpdatedFile(response);
-            }, this, RequestMethod.GET, null, 15f); 
-        }
-
-        // Add this new helper method anywhere in the class (e.g. near the other private methods)
-        private int CompareVersions(string v1, string v2)
-        {
-            try
-            {
-                var version1 = new Version(v1);
-                var version2 = new Version(v2);
-                return version1.CompareTo(version2);
-            }
-            catch
-            {
-                return 0; // fallback if version format is invalid
-            }
-        }
-
-        private void SaveUpdatedFile(string content)
-        {
-            string path = Path.Combine(Interface.Oxide.PluginDirectory, $"{Name}.cs");
-            try
-            {
-                File.WriteAllText(path, content, new UTF8Encoding(false));
-                _lastUpdateCheck = DateTime.Now;
-                Puts(Lang("UpdateDownloaded"));
-                if (!_updateReloadScheduled)
-                {
-                    _updateReloadScheduled = true;
-                    timer.Once(3f, () => Server.Command($"oxide.reload {Name}"));
-                }
-            }
-            catch (Exception ex)
-            {
-                PrintError($"Failed to write update: {ex.Message}");
-            }
-        }
-
-        private string ExtractVersion(string source)
-        {
-            var match = Regex.Match(source, @"\[Info\(\s*""[^""]+""\s*,\s*""[^""]+""\s*,\s*""([^""]+)""\s*\)\]");
-            return match.Success ? match.Groups[1].Value.Trim() : null;
-        }
-
-        private bool IsStableVersion(string ver)
-        {
-            if (string.IsNullOrWhiteSpace(ver)) return false;
-            return Regex.IsMatch(ver.Trim(), @"^\d+(\.\d+){1,3}$");
-        }
-
-        #endregion
-
-        #region Oxide Hooks
+        #region Init / Unload
 
         private void Init()
         {
-            permission.RegisterPermission(PermissionManage, this);
-            permission.RegisterPermission(PermissionReload, this);
-            permission.RegisterPermission(PermissionPersonal, this);
-            permission.RegisterPermission(PermissionInfo, this);
-
+            RegisterPermissions();
+            LoadConfig();
             LoadData();
-            LoadConfig(); // already called, but ensures normalised
-            EnsurePermissionsRegistered();
         }
 
         private void OnServerInitialized()
         {
-            PrintStartupBanner();
-            CheckForUpdates();
             StartRefreshTimer();
-            NextTick(() => RefreshAllPlayers());
-        }
-
-        private void OnPlayerInit(BasePlayer player)
-        {
-            if (player == null) return;
-            NextTick(() =>
-            {
-                if (player == null || !player.IsConnected) return;
-                StoreOriginalName(player);
-                UpdatePlayer(player, true);
-            });
-        }
-
-        private void OnPlayerConnected(BasePlayer player) => OnPlayerInit(player);
-
-        private void OnPlayerDisconnected(BasePlayer player, string reason)
-        {
-            if (player == null) return;
-            RestoreOriginalName(player);
-            // _renderStates.Remove(player.userID); // deleted because the dictionary is not in use
-        }
-        private void OnUserGroupAdded(string id, string groupName)
-        {
-            if (!ulong.TryParse(id, out var uid)) return;
-            var player = BasePlayer.FindByID(uid);
-            if (player != null) UpdatePlayer(player, true);
-        }
-
-        private void OnUserGroupRemoved(string id, string groupName)
-        {
-            if (!ulong.TryParse(id, out var uid)) return;
-            var player = BasePlayer.FindByID(uid);
-            if (player != null) UpdatePlayer(player, true);
-        }
-
-        private void OnUserPermissionGranted(string id, string perm)
-        {
-            if (!ulong.TryParse(id, out var uid)) return;
-            var player = BasePlayer.FindByID(uid);
-            if (player != null) UpdatePlayer(player, true);
-        }
-
-        private void OnUserPermissionRevoked(string id, string perm)
-        {
-            if (!ulong.TryParse(id, out var uid)) return;
-            var player = BasePlayer.FindByID(uid);
-            if (player != null) UpdatePlayer(player, true);
-        }
-
-        private object OnPlayerChat(BasePlayer player, string message, ConVar.Chat.ChatChannel channel)
-        {
-            if (player == null) return null;
-            var resolved = ResolveTag(player);
-            string chatPrefix = resolved?.ChatPrefix ?? "";
-            string chatColor = resolved?.ChatPrefixColor ?? "#ffffff";
-            if (string.IsNullOrWhiteSpace(chatPrefix)) return null;
-
-            string prefixColored = string.IsNullOrWhiteSpace(chatColor) || chatColor == "#ffffff"
-                ? chatPrefix
-                : $"<color={chatColor}>{chatPrefix}</color> ";
-
-            string formatted = Lang("ChatFormat", player.UserIDString, prefixColored, player.displayName, message);
-            return formatted;
+            NextTick(RefreshAll);
+            PrintBanner();
         }
 
         private void Unload()
         {
             _refreshTimer?.Destroy();
-            foreach (var player in BasePlayer.activePlayerList)
-            {
-                if (player == null) continue;
-                RestoreOriginalName(player);
-            }
+            RemoveTemporaryAdminFlags();
             SaveData();
+        }
+
+        private void PrintBanner()
+        {
+            Puts("=================================================");
+            Puts($" MagicTags v{Version} by whitecristafer");
+            Puts(" The plugin allows you to display the player's prefix above the player.");
+            Puts("=================================================");
         }
 
         #endregion
 
-        #region Core Logic
+        #region Permissions
 
-        private Timer _refreshTimer;
-        private readonly Dictionary<ulong, string> _originalNames = new Dictionary<ulong, string>();
-        private readonly Dictionary<ulong, string> _lastResolvedSignatures = new Dictionary<ulong, string>();
+        private void RegisterPermissions()
+        {
+            permission.RegisterPermission(PermAdmin, this);
+            permission.RegisterPermission(PermSee, this);
+            permission.RegisterPermission(PermHide, this);
+            permission.RegisterPermission(PermCustomPrefix, this);
+            permission.RegisterPermission(PermCustomColor, this);
+            permission.RegisterPermission(PermPersonal, this);
+            permission.RegisterPermission(PermReload, this);
+            permission.RegisterPermission(PermManage, this);
+        }
+
+        private bool HasPermission(BasePlayer player, string perm)
+        {
+            if (player == null)
+                return true;
+
+            if (player.IsAdmin)
+                return true;
+
+            return permission.UserHasPermission(player.UserIDString, perm);
+        }
+
+        private bool CanSeeTags(BasePlayer player)
+        {
+            if (player == null)
+                return false;
+
+            if (player.IsAdmin)
+                return true;
+
+            return permission.UserHasPermission(player.UserIDString, PermSee) || permission.UserHasPermission(player.UserIDString, PermAdmin);
+        }
+
+        #endregion
+
+        #region Hooks
+
+        private void OnPlayerConnected(BasePlayer player)
+        {
+            if (player == null) return;
+            NextTick(() => RefreshPlayer(player));
+        }
+
+        private void OnPlayerDisconnected(BasePlayer player, string reason)
+        {
+            if (player == null) return;
+            _temporaryAdminFlags.Remove(player.userID);
+        }
+
+        private void OnUserGroupAdded(string id, string groupName)
+        {
+            RefreshByUserId(id);
+        }
+        private void OnUserGroupRemoved(string id, string groupName)
+        {
+            RefreshByUserId(id);
+        }
+        private void OnUserPermissionGranted(string id, string perm)
+        {
+            RefreshByUserId(id);
+        }
+        private void OnUserPermissionRevoked(string id, string perm)
+        {
+            RefreshByUserId(id);
+        }
+
+        #endregion
+
+        #region Refresh Loop
 
         private void StartRefreshTimer()
         {
             _refreshTimer?.Destroy();
-            float interval = Mathf.Clamp(_config?.General?.UpdateInterval ?? 0.5f, 0.1f, 10f);
-            _refreshTimer = timer.Every(interval, RefreshAllPlayers);
+            _refreshTimer = timer.Every(_config.Settings.UpdateInterval, RefreshAll);
         }
 
-        private void RefreshAllPlayers()
+        private void RefreshAll()
         {
-            foreach (var player in BasePlayer.activePlayerList)
-            {
-                if (player == null || !player.IsConnected) continue;
-                StoreOriginalName(player);
-                UpdatePlayer(player, false);
-            }
-        }
-
-        private void UpdatePlayer(BasePlayer player, bool force)
-        {
-            if (player == null || !player.IsConnected) return;
-
-            StoreOriginalName(player);
-            var resolved = ResolveTag(player);
-            string signature = BuildSignature(resolved);
-            if (!force && _lastResolvedSignatures.TryGetValue(player.userID, out var lastSig) && lastSig == signature)
+            if (!_config.Settings.Enabled)
                 return;
 
-            _lastResolvedSignatures[player.userID] = signature;
-
-            // Overhead (displayName)
-            string newDisplay = BuildDisplayName(player, resolved);
-            if (player.displayName != newDisplay)
+            foreach (var viewer in BasePlayer.activePlayerList)
             {
-                player.displayName = newDisplay;
+                if (!CanSeeTags(viewer))
+                    continue;
+
+                bool tempFlag = EnsureTemporaryAdminFlag(viewer);
+
+                foreach (var target in BasePlayer.activePlayerList)
+                {
+                    if (target == null || !target.IsConnected)
+                        continue;
+
+                    if (!ShouldShowToViewer(viewer, target))
+                        continue;
+
+                    DrawTag(viewer, target);
+                }
+
+                if (tempFlag)
+                    ScheduleRemoveTemporaryFlag(viewer);
+            }
+        }
+
+        private void RefreshPlayer(BasePlayer player)
+        {
+            if (player == null || !player.IsConnected)
+                return;
+
+            if (!CanSeeTags(player))
+                return;
+
+            bool tempFlag = EnsureTemporaryAdminFlag(player);
+
+            foreach (var target in BasePlayer.activePlayerList)
+            {
+                if (target == null || !target.IsConnected)
+                    continue;
+
+                if (!ShouldShowToViewer(player, target))
+                    continue;
+
+                DrawTag(player, target);
+            }
+
+            if (tempFlag)
+                ScheduleRemoveTemporaryFlag(player);
+        }
+
+        private void RefreshByUserId(string id)
+        {
+            ulong userId;
+            if (!ulong.TryParse(id, out userId))
+                return;
+
+            var player = BasePlayer.FindByID(userId);
+            if (player != null)
+                RefreshPlayer(player);
+        }
+
+        #endregion
+
+        #region Tag Logic
+
+        private bool ShouldShowToViewer(BasePlayer viewer, BasePlayer target)
+        {
+            if (viewer == null || target == null)
+                return false;
+
+            if (!viewer.IsConnected || !target.IsConnected)
+                return false;
+
+            if (!_config.Settings.ShowSelf && viewer.userID == target.userID)
+                return false;
+
+            if (!viewer.IsAdmin && target.userID != viewer.userID)
+            {
+                var profile = GetProfile(target.userID);
+                if (profile.Hidden)
+                    return false;
+            }
+
+            if (_config.Settings.ShowOnlyForPermission && !viewer.IsAdmin && !permission.UserHasPermission(viewer.UserIDString, PermSee))
+                return false;
+
+            float distance = Vector3.Distance(viewer.eyes.position, target.eyes.position);
+            if (distance > _config.Settings.ViewDistance)
+                return false;
+
+            return true;
+        }
+
+        private string ResolvePrefix(BasePlayer target)
+        {
+            if (target == null)
+                return string.Empty;
+
+            var profile = GetProfile(target.userID);
+
+            // The personal prefix has the highest priority
+            if (!string.IsNullOrWhiteSpace(profile.CustomPrefix))
+                return profile.CustomPrefix.Trim();
+
+            // The real admin + the right magictags.admin
+            bool isRealAdmin = target.IsAdmin || permission.UserHasPermission(target.UserIDString, PermAdmin);
+
+            if (isRealAdmin)
+                return _config.Settings.AdminPrefixText;
+
+            // Command prefix
+            if (_config.Settings.UseTeamPrefix && target.currentTeam != 0)
+                return _config.Settings.TeamPrefixText;
+
+            // An ordinary player
+            return _config.Settings.DefaultPrefixText;
+        }
+
+        private string ResolvePrefixColor(BasePlayer target)
+        {
+            if (target == null)
+                return _config.Settings.DefaultPrefixColor;
+
+            var profile = GetProfile(target.userID);
+
+            if (!string.IsNullOrWhiteSpace(profile.CustomPrefix))
+                return NormalizeHex(profile.CustomPrefixColor, _config.Settings.CustomPrefixColor);
+
+            bool isRealAdmin = target.IsAdmin || permission.UserHasPermission(target.UserIDString, PermAdmin);
+
+            if (isRealAdmin)
+                return _config.Settings.AdminPrefixColor;
+
+            if (_config.Settings.UseTeamPrefix && target.currentTeam != 0)
+                return _config.Settings.TeamPrefixColor;
+
+            return _config.Settings.DefaultPrefixColor;
+        }
+
+        private void DrawTag(BasePlayer viewer, BasePlayer target)
+        {
+            if (viewer == null || target == null)
+                return;
+
+            string text = ResolvePrefix(target);
+            if (string.IsNullOrWhiteSpace(text))
+                return;
+
+            string color = ResolvePrefixColor(target);
+            Vector3 position = target.eyes != null ? target.eyes.position : target.transform.position;
+            position += new Vector3(0f, _config.Settings.TextHeight, 0f);
+
+            Color drawColor;
+            if (!TryParseColor(color, out drawColor))
+                drawColor = Color.white;
+
+            viewer.SendConsoleCommand("ddraw.text", _config.Settings.TextLifetime, drawColor, position, text);
+        }
+
+        #endregion
+
+        #region Admin Flag Support
+
+        private bool EnsureTemporaryAdminFlag(BasePlayer player)
+        {
+            if (player == null || !_config.Settings.RequireAdminFlagForRadarMode)
+                return false;
+
+            // We do not give the flag to real admins and those who already have an isAdmin.
+            if (player.IsAdmin)
+                return false;
+
+            if (_temporaryAdminFlags.Contains(player.userID))
+                return false;
+
+            // We give a temporary flag only if we have the right to see
+            if (permission.UserHasPermission(player.UserIDString, PermSee) || 
+                permission.UserHasPermission(player.UserIDString, PermAdmin))
+            {
+                player.SetPlayerFlag(BasePlayer.PlayerFlags.IsAdmin, true);
                 player.SendNetworkUpdateImmediate();
+                _temporaryAdminFlags.Add(player.userID);
+                return true;
             }
 
-            DebugLog($"Updated {player.UserIDString}: {newDisplay}");
+            return false;
         }
 
-        private string BuildDisplayName(BasePlayer player, ResolvedTag tag)
+        private void ScheduleRemoveTemporaryFlag(BasePlayer player)
         {
-            string original = _originalNames.ContainsKey(player.userID) ? _originalNames[player.userID] : player.displayName;
-            if (string.IsNullOrWhiteSpace(original)) original = "Player";
+            if (player == null)
+                return;
 
-            string overheadPrefix = tag?.OverheadPrefix ?? "";
-            string prefixColor = tag?.OverheadPrefixColor ?? "#ffffff";
-            string nameColor = tag?.OverheadNameColor ?? "#ffffff";
-
-            string coloredPrefix = string.IsNullOrWhiteSpace(overheadPrefix)
-                ? ""
-                : $"<color={prefixColor}>{overheadPrefix}</color> ";
-
-            string coloredName = nameColor == "#ffffff" ? original : $"<color={nameColor}>{original}</color>";
-
-            string display = $"{coloredPrefix}{coloredName}";
-
-            int maxLen = _config.General.MaxDisplayNameLength;
-            if (display.Length > maxLen)
+            timer.Once(0.1f, () =>
             {
-                // Truncate prefix first, then name
-                if (!string.IsNullOrWhiteSpace(coloredPrefix))
+                if (player == null || !player.IsConnected)
+                    return;
+
+                if (_temporaryAdminFlags.Contains(player.userID) && !permission.UserHasPermission(player.UserIDString, PermSee) && !permission.UserHasPermission(player.UserIDString, PermAdmin))
+                    return;
+
+                if (_temporaryAdminFlags.Contains(player.userID))
                 {
-                    int prefixLen = overheadPrefix.Length;
-                    int available = maxLen - (coloredName.Length); // naive, better to strip tags for length
-                    if (available <= 0) coloredPrefix = "";
-                    else
-                    {
-                        string rawPrefix = StripRichText(coloredPrefix).Trim();
-                        if (rawPrefix.Length > available)
-                            rawPrefix = rawPrefix.Substring(0, Math.Max(0, available)) + "…";
-                        coloredPrefix = $"<color={prefixColor}>{rawPrefix}</color> ";
-                    }
+                    player.SetPlayerFlag(BasePlayer.PlayerFlags.IsAdmin, false);
+                    player.SendNetworkUpdateImmediate();
+                    _temporaryAdminFlags.Remove(player.userID);
                 }
-                display = (coloredPrefix + coloredName).Substring(0, maxLen); // final cut
-            }
-
-            return display;
+            });
         }
 
-        private ResolvedTag ResolveTag(BasePlayer player)
+        private void RemoveTemporaryAdminFlags()
         {
-            if (player == null) return null;
-
-            // Personal override
-            if (_data.PersonalPrefixes.TryGetValue(player.userID, out var personal) && personal.Enabled)
+            foreach (var id in _temporaryAdminFlags.ToArray())
             {
-                return new ResolvedTag
+                var player = BasePlayer.FindByID(id);
+                if (player != null && !player.IsDestroyed)
                 {
-                    OverheadPrefix = personal.OverheadPrefix,
-                    OverheadPrefixColor = personal.OverheadPrefixColor,
-                    OverheadNameColor = personal.OverheadNameColor,
-                    ChatPrefix = personal.ChatPrefix,
-                    ChatPrefixColor = personal.ChatPrefixColor,
-                    Source = "personal"
-                };
-            }
-
-            // Find best matching config entry (highest priority)
-            PrefixEntry best = null;
-            foreach (var entry in _config.Prefixes.OrderByDescending(x => x.Priority))
-            {
-                if (!entry.Enabled) continue;
-                if (PlayerHasAccess(player, entry))
-                {
-                    best = entry;
-                    break;
+                    player.SetPlayerFlag(BasePlayer.PlayerFlags.IsAdmin, false);
+                    player.SendNetworkUpdateImmediate();
                 }
             }
 
-            if (best != null)
+            _temporaryAdminFlags.Clear();
+        }
+
+        #endregion
+
+        #region Helpers
+
+        private static string NormalizeHex(string value, string fallback)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return fallback;
+
+            value = value.Trim();
+            if (!value.StartsWith("#"))
+                value = "#" + value;
+
+            return Regex.IsMatch(value, "^#(?:[0-9a-fA-F]{3}){1,2}$") ? value : fallback;
+        }
+
+        private static bool TryParseColor(string value, out Color color)
+        {
+            value = NormalizeHex(value, "#ffffff");
+            return ColorUtility.TryParseHtmlString(value, out color);
+        }
+
+        private PlayerProfile GetProfile(ulong userId)
+        {
+            return GetOrCreateProfile(userId);
+        }
+
+        private bool TryFindPlayer(string input, out BasePlayer player)
+        {
+            player = null;
+            if (string.IsNullOrWhiteSpace(input))
+                return false;
+
+            if (ulong.TryParse(input, out var uid))
             {
-                return new ResolvedTag
-                {
-                    OverheadPrefix = best.OverheadPrefix,
-                    OverheadPrefixColor = best.OverheadPrefixColor,
-                    OverheadNameColor = best.OverheadNameColor,
-                    ChatPrefix = best.ChatPrefix,
-                    ChatPrefixColor = best.ChatPrefixColor,
-                    Source = $"config:{best.Key}"
-                };
+                player = BasePlayer.FindByID(uid) ?? BasePlayer.FindSleeping(uid);
+                return player != null;
             }
 
-            // Global default
-            if (_config.DefaultPrefix.Enabled)
-            {
-                return new ResolvedTag
-                {
-                    OverheadPrefix = _config.DefaultPrefix.OverheadPrefix,
-                    OverheadPrefixColor = _config.DefaultPrefix.OverheadPrefixColor,
-                    OverheadNameColor = _config.DefaultPrefix.OverheadNameColor,
-                    ChatPrefix = _config.DefaultPrefix.ChatPrefix,
-                    ChatPrefixColor = _config.DefaultPrefix.ChatPrefixColor,
-                    Source = "default"
-                };
-            }
+            player = BasePlayer.activePlayerList.FirstOrDefault(x =>
+                x != null && x.displayName != null &&
+                x.displayName.IndexOf(input, StringComparison.OrdinalIgnoreCase) >= 0);
 
-            return null;
-        }
-
-        private bool PlayerHasAccess(BasePlayer player, PrefixEntry entry)
-        {
-            if (player == null) return false;
-            string suffix = entry.PermissionSuffix.Trim();
-            if (string.IsNullOrWhiteSpace(suffix)) return false;
-
-            if (entry.Type == PermissionType.Group)
-                return permission.UserHasGroup(player.UserIDString, suffix);
-
-            // Permission type (auto-detect group if exists)
-            if (permission.GroupExists(suffix))
-                return permission.UserHasGroup(player.UserIDString, suffix);
-
-            return permission.UserHasPermission(player.UserIDString, suffix);
-        }
-
-        private string BuildSignature(ResolvedTag tag)
-        {
-            if (tag == null) return "none";
-            return $"{tag.OverheadPrefix}|{tag.OverheadPrefixColor}|{tag.OverheadNameColor}|{tag.ChatPrefix}|{tag.ChatPrefixColor}";
-        }
-
-        private void StoreOriginalName(BasePlayer player)
-        {
-            if (player == null) return;
-            if (!_originalNames.ContainsKey(player.userID) || string.IsNullOrWhiteSpace(_originalNames[player.userID]))
-                _originalNames[player.userID] = player.displayName;
-        }
-
-        private void RestoreOriginalName(BasePlayer player)
-        {
-            if (player == null) return;
-            if (_originalNames.TryGetValue(player.userID, out var orig) && !string.IsNullOrWhiteSpace(orig))
-                player.displayName = orig;
-        }
-
-        private void EnsurePermissionsRegistered()
-        {
-            foreach (var entry in _config.Prefixes)
-            {
-                if (string.IsNullOrWhiteSpace(entry.PermissionSuffix)) continue;
-                string perm = entry.PermissionSuffix.Trim();
-                if (!permission.PermissionExists(perm) && !permission.GroupExists(perm))
-                {
-                    if (entry.Type == PermissionType.Permission)
-                        permission.RegisterPermission(perm, this);
-                }
-            }
-        }
-
-        private string StripRichText(string input) => Regex.Replace(input, "<.*?>", string.Empty);
-
-        private class ResolvedTag
-        {
-            public string OverheadPrefix;
-            public string OverheadPrefixColor;
-            public string OverheadNameColor;
-            public string ChatPrefix;
-            public string ChatPrefixColor;
-            public string Source;
+            return player != null;
         }
 
         #endregion
@@ -743,342 +667,317 @@ namespace Oxide.Plugins
         #region Commands
 
         [ChatCommand("magictags")]
-        private void CmdMagicTags(BasePlayer player, string command, string[] args) => HandleCommand(player, args);
+        private void CmdMagicTags(BasePlayer player, string command, string[] args)
+        {
+            HandleCommand(player, args);
+        }
 
         [ChatCommand("mtags")]
-        private void CmdMTags(BasePlayer player, string command, string[] args) => HandleCommand(player, args);
+        private void CmdMTags(BasePlayer player, string command, string[] args)
+        {
+            HandleCommand(player, args);
+        }
 
         [ConsoleCommand("magictags")]
-        private void CConsoleMagicTags(ConsoleSystem.Arg arg)
+        private void CCmdMagicTags(ConsoleSystem.Arg arg)
         {
             var player = arg.Player();
-            string[] args = arg.Args?.Select(a => a.ToString()).ToArray() ?? Array.Empty<string>();
+            string[] args = arg.Args != null ? arg.Args.Select(a => a.ToString()).ToArray() : Array.Empty<string>();
             HandleCommand(player, args);
         }
 
         private void HandleCommand(BasePlayer player, string[] args)
         {
-            if (args.Length == 0 || args[0].ToLower() == "help")
+            if (args == null || args.Length == 0)
             {
-                Message(player, "Help");
+                Reply(player, "Help");
                 return;
             }
 
-            string sub = args[0].ToLower();
+            string sub = args[0].ToLowerInvariant();
 
             switch (sub)
             {
+                case "help":
+                    Reply(player, "Help");
+                    break;
+
                 case "info":
-                    if (!HasPerm(player, PermissionInfo)) return;
-                    Message(player, "Info", Version, _config.Prefixes.Count,
-                        _config.Prefixes.Count(x => x.Enabled), _data.PersonalPrefixes.Count,
-                        _config.General.UpdateInterval, _config.General.MaxDisplayNameLength);
+                    Reply(player, "Info", Version, _data.Players.Count, _config.Settings.UpdateInterval, _config.Settings.ViewDistance);
                     break;
 
-                case "list":
-                    if (!HasPerm(player, PermissionManage)) return;
-                    int page = 1;
-                    if (args.Length > 1) int.TryParse(args[1], out page);
-                    ShowList(player, page);
+                case "hide":
+                    HandleHide(player, true);
                     break;
 
-                case "reload":
-                    if (!HasPerm(player, PermissionReload)) return;
-                    LoadConfig();
-                    LoadData();
-                    EnsurePermissionsRegistered();
-                    StartRefreshTimer();
-                    RefreshAllPlayers();
-                    Message(player, "Reloaded");
+                case "show":
+                    HandleHide(player, false);
                     break;
 
-                case "sync":
-                    if (!HasPerm(player, PermissionManage)) return;
-                    RefreshAllPlayers();
-                    Message(player, "Synced");
+                case "prefix":
+                    HandleSelfPrefix(player, args);
                     break;
 
-                case "add":
-                    if (!HasPerm(player, PermissionManage)) return;
-                    if (args.Length < 3)
-                    {
-                        Message(player, "Help");
-                        return;
-                    }
-                    AddPrefix(player, args[1], args[2], args.Length > 3 ? args[3] : "perm");
+                case "color":
+                    HandleSelfColor(player, args);
                     break;
 
-                case "remove":
-                case "delete":
-                    if (!HasPerm(player, PermissionManage)) return;
-                    if (args.Length < 2)
-                    {
-                        Message(player, "Help");
-                        return;
-                    }
-                    RemovePrefix(player, args[1]);
-                    break;
-
-                case "set":
-                    if (!HasPerm(player, PermissionManage)) return;
-                    if (args.Length < 4)
-                    {
-                        Message(player, "Help");
-                        return;
-                    }
-                    SetPrefix(player, args[1], args[2], string.Join(" ", args.Skip(3).ToArray()));
+                case "clear":
+                    HandleClearSelf(player);
                     break;
 
                 case "personal":
-                    if (!HasPerm(player, PermissionPersonal)) return;
                     HandlePersonal(player, args);
                     break;
 
+                case "reload":
+                    if (!HasPermission(player, PermReload) && !HasPermission(player, PermAdmin) && !HasPermission(player, PermManage))
+                    {
+                        Reply(player, "NoPermission");
+                        return;
+                    }
+
+                    LoadConfig();
+                    LoadData();
+                    StartRefreshTimer();
+                    RefreshAll();
+                    Reply(player, "Reloaded");
+                    break;
+
+                case "sync":
+                    if (!HasPermission(player, PermManage) && !HasPermission(player, PermAdmin))
+                    {
+                        Reply(player, "NoPermission");
+                        return;
+                    }
+
+                    RefreshAll();
+                    Reply(player, "Synced");
+                    break;
+
                 default:
-                    Message(player, "Help");
+                    Reply(player, "Help");
                     break;
             }
         }
 
-        private void ShowList(BasePlayer player, int page)
+        private void HandleHide(BasePlayer player, bool hide)
         {
-            int perPage = 7;
-            var entries = _config.Prefixes.OrderByDescending(x => x.Priority).ThenBy(x => x.Key).ToList();
-            if (entries.Count == 0)
+            if (player == null)
+                return;
+
+            if (!HasPermission(player, PermHide) && !HasPermission(player, PermPersonal))
             {
-                Message(player, "PrefixList", 1, 1);
+                Reply(player, "NoPermission");
                 return;
             }
-            int pages = (int)Math.Ceiling((double)entries.Count / perPage);
-            page = Math.Max(1, Math.Min(page, pages));
-            var pageEntries = entries.Skip((page - 1) * perPage).Take(perPage).ToList();
 
-            string header = Lang("PrefixList", player.UserIDString, page, pages);
-            var lines = new List<string> { header };
-            int index = (page - 1) * perPage + 1;
-            foreach (var e in pageEntries)
-            {
-                lines.Add(Lang("PrefixEntry", player.UserIDString, index++, e.Key, e.PermissionSuffix,
-                    e.Enabled, e.Priority, e.OverheadPrefix ?? "none", e.ChatPrefix ?? "none"));
-            }
-            player.ChatMessage(string.Join("\n", lines));
+            var profile = GetProfile(player.userID);
+            profile.Hidden = hide;
+            profile.UpdatedBy = player.UserIDString;
+            profile.UpdatedAt = DateTime.UtcNow.ToString("u");
+            SaveData();
+            RefreshPlayer(player);
+            Reply(player, hide ? "HiddenOn" : "HiddenOff");
         }
 
-        private void AddPrefix(BasePlayer player, string key, string suffix, string typeStr)
+        private void HandleSelfPrefix(BasePlayer player, string[] args)
         {
-            string normKey = key.ToLower().Trim();
-            if (_config.Prefixes.Any(x => x.Key == normKey))
+            if (player == null)
+                return;
+
+            if (!HasPermission(player, PermCustomPrefix) && !HasPermission(player, PermPersonal))
             {
-                Message(player, "Exists", normKey);
+                Reply(player, "NoPermission");
                 return;
             }
 
-            PermissionType type = typeStr.ToLower() == "group" ? PermissionType.Group : PermissionType.Permission;
-            _config.Prefixes.Add(new PrefixEntry
+            if (args.Length < 2)
             {
-                Key = normKey,
-                PermissionSuffix = suffix.Trim(),
-                Type = type,
-                Enabled = true,
-                Priority = 0,
-                OverheadPrefix = $"[{normKey.ToUpper()}]",
-                OverheadPrefixColor = "#ffffff",
-                OverheadNameColor = "#ffffff",
-                ChatPrefix = "",
-                ChatPrefixColor = "#ffffff"
-            });
-            SaveConfig();
-            EnsurePermissionsRegistered();
-            RefreshAllPlayers();
-            Message(player, "Added", normKey);
+                Reply(player, "InvalidUsage");
+                return;
+            }
+
+            string prefix = string.Join(" ", args.Skip(1).ToArray()).Trim();
+            var profile = GetProfile(player.userID);
+            profile.CustomPrefix = prefix;
+            profile.UpdatedBy = player.UserIDString;
+            profile.UpdatedAt = DateTime.UtcNow.ToString("u");
+            SaveData();
+            RefreshPlayer(player);
+            Reply(player, "PrefixSet", prefix);
         }
 
-        private void RemovePrefix(BasePlayer player, string key)
+        private void HandleSelfColor(BasePlayer player, string[] args)
         {
-            string normKey = key.ToLower().Trim();
-            var entry = _config.Prefixes.FirstOrDefault(x => x.Key == normKey);
-            if (entry == null)
+            if (player == null)
+                return;
+
+            if (!HasPermission(player, PermCustomColor) && !HasPermission(player, PermPersonal))
             {
-                Message(player, "NotFound", normKey);
+                Reply(player, "NoPermission");
                 return;
             }
-            _config.Prefixes.Remove(entry);
-            SaveConfig();
-            RefreshAllPlayers();
-            Message(player, "Removed", normKey);
+
+            if (args.Length < 2)
+            {
+                Reply(player, "InvalidUsage");
+                return;
+            }
+
+            string color = NormalizeHex(args[1], string.Empty);
+            if (string.IsNullOrWhiteSpace(color))
+            {
+                Reply(player, "InvalidColor");
+                return;
+            }
+
+            var profile = GetProfile(player.userID);
+            profile.CustomPrefixColor = color;
+            profile.UpdatedBy = player.UserIDString;
+            profile.UpdatedAt = DateTime.UtcNow.ToString("u");
+            SaveData();
+            RefreshPlayer(player);
+            Reply(player, "ColorSet", color);
         }
 
-        private void SetPrefix(BasePlayer player, string key, string field, string value)
+        private void HandleClearSelf(BasePlayer player)
         {
-            string normKey = key.ToLower().Trim();
-            var entry = _config.Prefixes.FirstOrDefault(x => x.Key == normKey);
-            if (entry == null)
+            if (player == null)
+                return;
+
+            if (!HasPermission(player, PermCustomPrefix) && !HasPermission(player, PermPersonal) && !HasPermission(player, PermHide))
             {
-                Message(player, "NotFound", normKey);
+                Reply(player, "NoPermission");
                 return;
             }
 
-            field = field.ToLower();
-            switch (field)
-            {
-                case "overheadprefix":
-                    entry.OverheadPrefix = value;
-                    break;
-                case "overheadcolor":
-                case "overheadprefixcolor":
-                    entry.OverheadPrefixColor = NormalizeColor(value);
-                    break;
-                case "overheadnamecolor":
-                    entry.OverheadNameColor = NormalizeColor(value);
-                    break;
-                case "chatprefix":
-                    entry.ChatPrefix = value;
-                    break;
-                case "chatcolor":
-                case "chatprefixcolor":
-                    entry.ChatPrefixColor = NormalizeColor(value);
-                    break;
-                case "priority":
-                    if (int.TryParse(value, out int p)) entry.Priority = p;
-                    else { Message(player, "Help"); return; }
-                    break;
-                case "enabled":
-                    if (bool.TryParse(value, out bool en)) entry.Enabled = en;
-                    else { Message(player, "Help"); return; }
-                    break;
-                case "permission":
-                case "perm":
-                case "permissionsuffix":
-                    entry.PermissionSuffix = value.Trim();
-                    break;
-                case "type":
-                    if (value.ToLower() == "group") entry.Type = PermissionType.Group;
-                    else entry.Type = PermissionType.Permission;
-                    break;
-                default:
-                    Message(player, "Help");
-                    return;
-            }
-
-            SaveConfig();
-            EnsurePermissionsRegistered();
-            RefreshAllPlayers();
-            Message(player, "Updated", normKey);
+            var profile = GetProfile(player.userID);
+            profile.CustomPrefix = string.Empty;
+            profile.CustomPrefixColor = string.Empty;
+            profile.Hidden = false;
+            profile.UpdatedBy = player.UserIDString;
+            profile.UpdatedAt = DateTime.UtcNow.ToString("u");
+            SaveData();
+            RefreshPlayer(player);
+            Reply(player, "Cleared");
         }
 
         private void HandlePersonal(BasePlayer player, string[] args)
         {
-            if (args.Length < 2)
+            if (!HasPermission(player, PermPersonal) && !HasPermission(player, PermAdmin) && !HasPermission(player, PermManage))
             {
-                Message(player, "Help");
+                Reply(player, "NoPermission");
                 return;
             }
 
-            string action = args[1].ToLower();
-            if (action == "info")
+            if (args.Length < 3)
             {
-                if (args.Length < 3) { Message(player, "Help"); return; }
-                ulong uid;
-                if (!TryFindPlayer(args[2], out uid)) { Message(player, "NotFound", args[2]); return; }
-                if (!_data.PersonalPrefixes.TryGetValue(uid, out var pp))
-                {
-                    Message(player, "NotFound", uid.ToString());
-                    return;
-                }
-                Message(player, "PersonalInfo", uid.ToString(), pp.Enabled, pp.OverheadPrefix, pp.ChatPrefix, pp.UpdatedBy, pp.UpdatedAt);
+                Reply(player, "InvalidUsage");
                 return;
             }
 
-            if (args.Length < 3) { Message(player, "Help"); return; }
-            if (!TryFindPlayer(args[2], out ulong targetId)) { Message(player, "NotFound", args[2]); return; }
+            string action = args[1].ToLowerInvariant();
+            string targetInput = args[2];
+
+            if (!TryFindPlayer(targetInput, out var target))
+            {
+                Reply(player, "PlayerNotFound");
+                return;
+            }
+
+            var profile = GetProfile(target.userID);
 
             switch (action)
             {
                 case "set":
-                    if (args.Length < 4) { Message(player, "Help"); return; }
-                    string text = string.Join(" ", args.Skip(3).ToArray());
-                    var entry = GetOrCreatePersonal(targetId);
-                    entry.Enabled = true;
-                    entry.OverheadPrefix = text;
-                    entry.UpdatedBy = player?.UserIDString ?? "console";
-                    entry.UpdatedAt = DateTime.UtcNow.ToString("u");
+                    if (args.Length < 4)
+                    {
+                        Reply(player, "InvalidUsage");
+                        return;
+                    }
+
+                    profile.CustomPrefix = string.Join(" ", args.Skip(3).ToArray()).Trim();
+                    profile.UpdatedBy = player != null ? player.UserIDString : "console";
+                    profile.UpdatedAt = DateTime.UtcNow.ToString("u");
                     SaveData();
-                    RefreshPlayer(targetId);
-                    Message(player, "PersonalSet", targetId);
+                    RefreshPlayer(target);
+                    Reply(player, "PersonalSet", target.displayName);
                     break;
 
                 case "color":
-                    if (args.Length < 4) { Message(player, "Help"); return; }
-                    var eColor = GetOrCreatePersonal(targetId);
-                    string col = NormalizeColor(args[3]);
-                    eColor.OverheadPrefixColor = col;
-                    eColor.UpdatedBy = player?.UserIDString ?? "console";
-                    eColor.UpdatedAt = DateTime.UtcNow.ToString("u");
+                    if (args.Length < 4)
+                    {
+                        Reply(player, "InvalidUsage");
+                        return;
+                    }
+
+                    string color = NormalizeHex(args[3], string.Empty);
+                    if (string.IsNullOrWhiteSpace(color))
+                    {
+                        Reply(player, "InvalidColor");
+                        return;
+                    }
+
+                    profile.CustomPrefixColor = color;
+                    profile.UpdatedBy = player != null ? player.UserIDString : "console";
+                    profile.UpdatedAt = DateTime.UtcNow.ToString("u");
                     SaveData();
-                    RefreshPlayer(targetId);
-                    Message(player, "PersonalSet", targetId);
+                    RefreshPlayer(target);
+                    Reply(player, "PersonalColor", target.displayName);
+                    break;
+
+                case "hide":
+                    profile.Hidden = true;
+                    profile.UpdatedBy = player != null ? player.UserIDString : "console";
+                    profile.UpdatedAt = DateTime.UtcNow.ToString("u");
+                    SaveData();
+                    RefreshPlayer(target);
+                    Reply(player, "PersonalHidden", target.displayName);
+                    break;
+
+                case "show":
+                    profile.Hidden = false;
+                    profile.UpdatedBy = player != null ? player.UserIDString : "console";
+                    profile.UpdatedAt = DateTime.UtcNow.ToString("u");
+                    SaveData();
+                    RefreshPlayer(target);
+                    Reply(player, "PersonalHidden", target.displayName);
                     break;
 
                 case "clear":
-                    if (_data.PersonalPrefixes.Remove(targetId))
-                    {
-                        SaveData();
-                        RefreshPlayer(targetId);
-                        Message(player, "PersonalCleared", targetId);
-                    }
-                    else Message(player, "NotFound", targetId.ToString());
+                    profile.CustomPrefix = string.Empty;
+                    profile.CustomPrefixColor = string.Empty;
+                    profile.Hidden = false;
+                    profile.UpdatedBy = player != null ? player.UserIDString : "console";
+                    profile.UpdatedAt = DateTime.UtcNow.ToString("u");
+                    SaveData();
+                    RefreshPlayer(target);
+                    Reply(player, "PersonalCleared", target.displayName);
+                    break;
+
+                case "info":
+                    Reply(player, "PersonalInfo", target.displayName, profile.Hidden, profile.CustomPrefix, profile.CustomPrefixColor, profile.UpdatedBy, profile.UpdatedAt);
                     break;
 
                 default:
-                    Message(player, "Help");
+                    Reply(player, "InvalidUsage");
                     break;
             }
         }
 
-        private PersonalPrefix GetOrCreatePersonal(ulong uid)
+        private void Reply(BasePlayer player, string key, params object[] args)
         {
-            if (!_data.PersonalPrefixes.TryGetValue(uid, out var pp))
-            {
-                pp = new PersonalPrefix();
-                _data.PersonalPrefixes[uid] = pp;
-            }
-            return pp;
-        }
+            string text = Lang(key, player != null ? player.UserIDString : "0", args);
 
-        private void RefreshPlayer(ulong uid)
-        {
-            var player = BasePlayer.FindByID(uid);
-            if (player != null) UpdatePlayer(player, true);
-        }
-
-        private bool TryFindPlayer(string input, out ulong uid)
-        {
-            if (ulong.TryParse(input, out uid)) return true;
-            var player = BasePlayer.activePlayerList.FirstOrDefault(p => p.displayName.IndexOf(input, StringComparison.OrdinalIgnoreCase) >= 0);
             if (player != null)
             {
-                uid = player.userID;
-                return true;
+                player.SendConsoleCommand("chat.add", 2, PluginIcon, $"{ChatPrefix} {text}");
             }
-            uid = 0;
-            return false;
-        }
-
-        private string NormalizeColor(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value)) return "#ffffff";
-            value = value.Trim();
-            if (!value.StartsWith("#")) value = "#" + value;
-            return Regex.IsMatch(value, "^#(?:[0-9a-fA-F]{3}){1,2}$") ? value : "#ffffff";
-        }
-
-        private bool HasPerm(BasePlayer player, string perm)
-        {
-            if (player == null) return true; // console
-            if (player.IsAdmin) return true;
-            if (permission.UserHasPermission(player.UserIDString, perm)) return true;
-            Message(player, "NoPermission", Lang("Prefix"));
-            return false;
+            else
+            {
+                Puts($"{ChatPrefix} {text}");
+            }
         }
 
         #endregion
