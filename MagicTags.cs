@@ -10,8 +10,8 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("MagicTags", "whitecristafer", "2.1.0")]
-    [Description("MagicTags 2.1.0 - configurable overhead prefix renderer with permission/group rules, personal prefixes and RU/EN localization.")]
+    [Info("MagicTags", "whitecristafer", "2.2.0")]
+    [Description("MagicTags 2.2.0 - configurable overhead prefix renderer with hideview and always-visible admin prefixes")]
     public class MagicTags : RustPlugin
     {
         private const ulong PluginIcon = 76561198209258869;
@@ -123,6 +123,9 @@ namespace Oxide.Plugins
 
             [JsonProperty("Size")]
             public int Size = 16;
+
+            [JsonProperty("AlwaysVisible")]
+            public bool AlwaysVisible = false; // NEW: if true, this prefix is shown even when viewer hides others
         }
 
         protected override void LoadDefaultConfig()
@@ -188,6 +191,7 @@ namespace Oxide.Plugins
                 rule.Text = NormalizeText(rule.Text, "[TAG]");
                 rule.Color = NormalizeHex(rule.Color, "#ffffff");
                 rule.Size = Mathf.Clamp(rule.Size, 10, 24);
+                // AlwaysVisible already has default false if missing
             }
 
             _config.Prefixes = _config.Prefixes
@@ -223,6 +227,9 @@ namespace Oxide.Plugins
 
             [JsonProperty("UpdatedAt")]
             public string UpdatedAt = string.Empty;
+
+            [JsonProperty("ViewHidden")] // NEW: hides viewing of other players' prefixes (except admin/always-visible)
+            public bool ViewHidden = false;
         }
 
         private void LoadData()
@@ -276,8 +283,10 @@ namespace Oxide.Plugins
                 ["PluginDisabled"] = "MagicTags is disabled in the config.",
                 ["Help"] = "MagicTags commands:\n" +
                            "/magictags info - plugin info\n" +
-                           "/magictags hide - hide your tag\n" +
-                           "/magictags show - show your tag\n" +
+                           "/magictags hide - hide your own tag\n" +
+                           "/magictags show - show your own tag\n" +
+                           "/magictags hideview - hide other players' prefixes (admins still visible)\n" +
+                           "/magictags showview - show other players' prefixes again\n" +
                            "/magictags prefix <text> - set your custom prefix\n" +
                            "/magictags color <#hex> - set your custom prefix color\n" +
                            "/magictags clear - clear your custom prefix\n" +
@@ -288,8 +297,10 @@ namespace Oxide.Plugins
                 ["Info"] = "MagicTags v{0}\nPlayers with data: {1}\nUpdate interval: {2}s\nView distance: {3}m\nRules: {4}",
                 ["Reloaded"] = "MagicTags reloaded.",
                 ["Synced"] = "All players refreshed.",
-                ["HiddenOn"] = "Your tag is now hidden.",
-                ["HiddenOff"] = "Your tag is now visible.",
+                ["HiddenOn"] = "Your own tag is now hidden.",
+                ["HiddenOff"] = "Your own tag is now visible.",
+                ["ViewHiddenOn"] = "You will no longer see other players' prefixes (admins will remain visible).",
+                ["ViewHiddenOff"] = "You will now see other players' prefixes again.",
                 ["PrefixSet"] = "Custom prefix saved: {0}",
                 ["ColorSet"] = "Custom color saved: {0}",
                 ["Cleared"] = "Custom prefix data cleared.",
@@ -300,9 +311,9 @@ namespace Oxide.Plugins
                 ["PersonalColor"] = "Custom color set for {0}.",
                 ["PersonalHidden"] = "Hidden state changed for {0}.",
                 ["PersonalCleared"] = "Custom data cleared for {0}.",
-                ["PersonalInfo"] = "Player {0}: hidden={1}, prefix='{2}', color='{3}', updated_by={4}, updated_at={5}",
+                ["PersonalInfo"] = "Player {0}: hidden={1}, viewHidden={2}, prefix='{3}', color='{4}', updated_by={5}, updated_at={6}",
                 ["RuleListHeader"] = "Prefix rules page {0}/{1}:",
-                ["RuleListEntry"] = "  {0}. key={1} enabled={2} priority={3} type={4} access={5} text='{6}' color={7}",
+                ["RuleListEntry"] = "  {0}. key={1} enabled={2} priority={3} type={4} access={5} text='{6}' color={7} alwaysVisible={8}",
                 ["RuleAdded"] = "Prefix rule '{0}' added.",
                 ["RuleRemoved"] = "Prefix rule '{0}' removed.",
                 ["RuleUpdated"] = "Prefix rule '{0}' updated.",
@@ -320,6 +331,8 @@ namespace Oxide.Plugins
                            "/magictags info - информация о плагине\n" +
                            "/magictags hide - скрыть свой тег\n" +
                            "/magictags show - показать свой тег\n" +
+                           "/magictags hideview - скрыть чужие префиксы (админы остаются видны)\n" +
+                           "/magictags showview - снова показывать чужие префиксы\n" +
                            "/magictags prefix <текст> - установить свой префикс\n" +
                            "/magictags color <#hex> - установить цвет префикса\n" +
                            "/magictags clear - очистить свой префикс\n" +
@@ -330,8 +343,10 @@ namespace Oxide.Plugins
                 ["Info"] = "MagicTags v{0}\nИгроков с данными: {1}\nИнтервал обновления: {2}с\nДальность отображения: {3}м\nПравил: {4}",
                 ["Reloaded"] = "MagicTags перезагружен.",
                 ["Synced"] = "Все игроки обновлены.",
-                ["HiddenOn"] = "Тег теперь скрыт.",
-                ["HiddenOff"] = "Тег теперь виден.",
+                ["HiddenOn"] = "Ваш тег теперь скрыт.",
+                ["HiddenOff"] = "Ваш тег теперь виден.",
+                ["ViewHiddenOn"] = "Вы больше не видите чужие префиксы (администраторы остаются видны).",
+                ["ViewHiddenOff"] = "Вы снова видите чужие префиксы.",
                 ["PrefixSet"] = "Префикс сохранён: {0}",
                 ["ColorSet"] = "Цвет сохранён: {0}",
                 ["Cleared"] = "Префикс очищен.",
@@ -342,9 +357,9 @@ namespace Oxide.Plugins
                 ["PersonalColor"] = "Цвет установлен для {0}.",
                 ["PersonalHidden"] = "Статус скрытия изменён для {0}.",
                 ["PersonalCleared"] = "Данные очищены для {0}.",
-                ["PersonalInfo"] = "Игрок {0}: hidden={1}, prefix='{2}', color='{3}', updated_by={4}, updated_at={5}",
+                ["PersonalInfo"] = "Игрок {0}: hidden={1}, viewHidden={2}, prefix='{3}', color='{4}', updated_by={5}, updated_at={6}",
                 ["RuleListHeader"] = "Префиксы, страница {0}/{1}:",
-                ["RuleListEntry"] = "  {0}. key={1} enabled={2} priority={3} type={4} access={5} text='{6}' color={7}",
+                ["RuleListEntry"] = "  {0}. key={1} enabled={2} priority={3} type={4} access={5} text='{6}' color={7} alwaysVisible={8}",
                 ["RuleAdded"] = "Правило префикса '{0}' добавлено.",
                 ["RuleRemoved"] = "Правило префикса '{0}' удалено.",
                 ["RuleUpdated"] = "Правило префикса '{0}' обновлено.",
@@ -368,6 +383,7 @@ namespace Oxide.Plugins
             RegisterPermissions();
             LoadConfig();
             LoadData();
+            RegisterPrefixPermissions();
         }
 
         private void OnServerInitialized()
@@ -592,6 +608,7 @@ namespace Oxide.Plugins
             public string Text;
             public string Color;
             public int Size;
+            public bool AlwaysVisible; // NEW
         }
 
         private bool ShouldShowToViewer(BasePlayer viewer, BasePlayer target)
@@ -609,7 +626,11 @@ namespace Oxide.Plugins
                 return false;
 
             float distance = Vector3.Distance(GetViewPosition(viewer), GetViewPosition(target));
-            return distance <= _config.General.ViewDistance;
+            if (distance > _config.General.ViewDistance)
+                return false;
+
+            // NEW: if viewer has ViewHidden enabled, we will filter further in DrawTag
+            return true;
         }
 
         private PrefixOutput ResolvePrefix(BasePlayer target)
@@ -621,12 +642,14 @@ namespace Oxide.Plugins
             if (profile != null && profile.Hidden)
                 return null;
 
+            // Personal prefix
             if (profile != null && !string.IsNullOrWhiteSpace(profile.CustomPrefix))
             {
                 PrefixOutput personal = new PrefixOutput();
                 personal.Text = profile.CustomPrefix.Trim();
                 personal.Color = NormalizeHex(profile.CustomPrefixColor, "#ff66cc");
                 personal.Size = 16;
+                personal.AlwaysVisible = false; // personal prefixes are not forced visible
                 return personal;
             }
 
@@ -637,6 +660,7 @@ namespace Oxide.Plugins
                 output.Text = matched.Text;
                 output.Color = matched.Color;
                 output.Size = matched.Size;
+                output.AlwaysVisible = matched.AlwaysVisible;
                 return output;
             }
 
@@ -646,6 +670,7 @@ namespace Oxide.Plugins
                 fallback.Text = _config.DefaultPrefix.Text;
                 fallback.Color = _config.DefaultPrefix.Color;
                 fallback.Size = 16;
+                fallback.AlwaysVisible = false;
                 return fallback;
             }
 
@@ -714,6 +739,11 @@ namespace Oxide.Plugins
             PrefixOutput output = ResolvePrefix(target);
             if (output == null || string.IsNullOrWhiteSpace(output.Text))
                 return;
+
+            // NEW: Apply ViewHidden filter
+            PlayerProfile viewerProfile = GetProfile(viewer.userID);
+            if (viewerProfile.ViewHidden && viewer.userID != target.userID && !target.IsAdmin && !output.AlwaysVisible)
+                return; // viewer hides other non-admin prefixes
 
             Vector3 position = GetViewPosition(target) + new Vector3(0f, _config.General.TextHeight, 0f);
             Color drawColor;
@@ -853,6 +883,14 @@ namespace Oxide.Plugins
                     HandleHide(player, false);
                     return;
 
+                case "hideview": // NEW
+                    HandleViewHidden(player, true);
+                    return;
+
+                case "showview": // NEW
+                    HandleViewHidden(player, false);
+                    return;
+
                 case "prefix":
                     HandleSelfPrefix(player, args);
                     return;
@@ -937,6 +975,22 @@ namespace Oxide.Plugins
             Reply(player, hide ? "HiddenOn" : "HiddenOff");
         }
 
+        private void HandleViewHidden(BasePlayer player, bool hide) // NEW
+        {
+            if (player == null)
+                return;
+
+            // No permission required for this simple toggle, but we can restrict if needed
+            // For now, any player can use it
+            PlayerProfile profile = GetProfile(player.userID);
+            profile.ViewHidden = hide;
+            profile.UpdatedBy = player.UserIDString;
+            profile.UpdatedAt = DateTime.UtcNow.ToString("u");
+            SaveData();
+            RefreshPlayer(player);
+            Reply(player, hide ? "ViewHiddenOn" : "ViewHiddenOff");
+        }
+
         private void HandleSelfPrefix(BasePlayer player, string[] args)
         {
             if (player == null)
@@ -1012,6 +1066,7 @@ namespace Oxide.Plugins
             profile.CustomPrefix = string.Empty;
             profile.CustomPrefixColor = string.Empty;
             profile.Hidden = false;
+            // Do not reset ViewHidden intentionally
             profile.UpdatedBy = player.UserIDString;
             profile.UpdatedAt = DateTime.UtcNow.ToString("u");
             SaveData();
@@ -1106,6 +1161,7 @@ namespace Oxide.Plugins
                     profile.CustomPrefix = string.Empty;
                     profile.CustomPrefixColor = string.Empty;
                     profile.Hidden = false;
+                    // ViewHidden not reset here
                     profile.UpdatedBy = player != null ? player.UserIDString : "console";
                     profile.UpdatedAt = DateTime.UtcNow.ToString("u");
                     SaveData();
@@ -1114,7 +1170,7 @@ namespace Oxide.Plugins
                     return;
 
                 case "info":
-                    Reply(player, "PersonalInfo", target.displayName, profile.Hidden, profile.CustomPrefix, profile.CustomPrefixColor, profile.UpdatedBy, profile.UpdatedAt);
+                    Reply(player, "PersonalInfo", target.displayName, profile.Hidden, profile.ViewHidden, profile.CustomPrefix, profile.CustomPrefixColor, profile.UpdatedBy, profile.UpdatedAt);
                     return;
 
                 default:
@@ -1159,7 +1215,7 @@ namespace Oxide.Plugins
             for (int i = start; i < end; i++)
             {
                 PrefixRule rule = rules[i];
-                SendLine(player, Lang("RuleListEntry", player != null ? player.UserIDString : "0", index, rule.Key, rule.Enabled, rule.Priority, rule.Type, rule.Access, rule.Text, rule.Color));
+                SendLine(player, Lang("RuleListEntry", player != null ? player.UserIDString : "0", index, rule.Key, rule.Enabled, rule.Priority, rule.Type, rule.Access, rule.Text, rule.Color, rule.AlwaysVisible));
                 index++;
             }
         }
@@ -1197,6 +1253,7 @@ namespace Oxide.Plugins
                 if (int.TryParse(args[6], out pr))
                     rule.Priority = pr;
             }
+            // alwaysVisible can be set via 'set' command later
 
             _config.Prefixes.Add(rule);
             NormalizeConfig();
@@ -1281,6 +1338,17 @@ namespace Oxide.Plugins
                     }
                     break;
 
+                case "alwaysvisible": // NEW
+                    bool always;
+                    if (bool.TryParse(value, out always))
+                        rule.AlwaysVisible = always;
+                    else
+                    {
+                        Reply(player, "InvalidUsage");
+                        return;
+                    }
+                    break;
+
                 default:
                     Reply(player, "InvalidUsage");
                     return;
@@ -1332,6 +1400,17 @@ namespace Oxide.Plugins
                 player.SendConsoleCommand("chat.add", 2, PluginIcon, ChatPrefix + " " + text);
             else
                 Puts(ChatPrefix + " " + text);
+        }
+
+        private void RegisterPrefixPermissions()
+        {
+            if (_config?.Prefixes == null) return;
+            foreach (var rule in _config.Prefixes)
+            {
+                if (rule == null || rule.Type != PrefixAccessType.Permission) continue;
+                if (string.IsNullOrWhiteSpace(rule.Access)) continue;
+                permission.RegisterPermission(rule.Access, this);
+            }
         }
 
         private void SendLine(BasePlayer player, string message)
