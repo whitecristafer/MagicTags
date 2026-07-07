@@ -149,3 +149,7 @@ Player-specific settings are stored in:
 ## License
 
 This project is released under the Apache License 2.0. See `LICENSE` for the full text.
+
+<div align="center">
+  <sub>Created with ❤️ the INFUNV STUDIO</sub>
+</div>
