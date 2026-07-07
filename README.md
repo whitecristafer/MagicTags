@@ -1,185 +1,155 @@
 # MagicTags
 
-[English](README.md)
-
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](#)
-[![Status](https://img.shields.io/badge/status-stable-green.svg)](#)
-[![Rust](https://img.shields.io/badge/game-Rust-orange.svg)](#)
-[![Oxide](https://img.shields.io/badge/framework-Oxide%20%2F%20uMod-yellow.svg)](#)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](#)
+[![Status](https://img.shields.io/badge/status-release-green.svg)](#)
+[![Game](https://img.shields.io/badge/game-Rust-orange.svg)](#)
+[![Framework](https://img.shields.io/badge/framework-Oxide%20%2F%20uMod-yellow.svg)](#)
 [![Language](https://img.shields.io/badge/language-C%23-239120.svg)](#)
-[![License](https://img.shields.io/badge/license-Apache License 2.0-lightgrey.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-lightgrey.svg)](LICENSE)
 
-MagicTags is a Rust plugin for Oxide/uMod that manages prefixes for IQPermissions, TimedPermissions, and Oxide groups. It supports overhead prefixes (display name), chat prefixes, personal overrides, and automatic updates from a GitHub repository. Developed by **whitecristafer**, sponsored by **infunv.ru** for **evolve.infunv.ru**.
+MagicTags is a Rust plugin for Oxide/uMod that renders overhead prefixes without rewriting player names. It supports personal prefixes, permission-based and group-based rules, admin prefixes that stay visible even when a player hides other tags, local visibility controls, and a clean chat presentation.
 
-## Overview
+## What this release focuses on
 
-MagicTags gives server administrators full control over player prefixes both above the head and in chat. It automatically collects permissions and groups, applies prefixes based on priority, and allows each player to have a personal prefix stored in data files.  
-
-It is designed for servers that want:
-
-- Dynamic, per‑permission prefixes
-- Overhead display name integration with color support
-- Chat message prefixes without modifying other plugins
-- Personal prefix overrides for trusted players
-- Simple, unified command interface
-- Automatic update checks from the official repository
-
-## Features
-
-- Overhead prefix (displayName) and chat prefix separation
-- Per‑permission and per‑group prefix definitions
-- Global default prefix for players without a matching permission
-- Priority system – the highest priority matching prefix is used
-- Personal prefix storage in `data/` – overrides all other prefixes
-- Automatic data and config generation on first start
-- Automatic update check against the latest GitHub release source
-- Only stable versions are considered – development builds are ignored
-- Configurable max display name length to prevent overflow
-- Localization support for English and Russian
-- Clean console logging with the `MagicPrefix` tag
-- Smart refresh timer – only updates players when their prefix changes
+- Clean English-only localization
+- Optimized refresh flow and config normalization
+- Local `mhide` / `mshow` controls for the viewer only
+- Per-player local distance control inside a strict config range
+- Default global view distance set to **30 meters**
+- Admin prefixes with `AlwaysVisible` support
+- Dynamic permission and group rule handling
+- Runtime config reload and data reload
+- Ready-to-ship Apache 2.0 open-source release
 
 ## Commands
 
+Alias: `/mtags`
+
+### Player commands
+
 | Command | Description |
 | --- | --- |
-| `/magictags help` | Show help message |
-| `/magictags info` | Display plugin information |
-| `/magictags list [page]` | List all configured prefixes |
-| `/magictags add <key> <permissionSuffix> [type:perm/group]` | Add a new prefix |
-| `/magictags set <key> <field> <value>` | Modify an existing prefix |
-| `/magictags remove <key>` | Remove a prefix |
-| `/magictags personal set <player/steamid> <text>` | Set a personal overhead prefix |
-| `/magictags personal color <player/steamid> <hex>` | Set personal overhead prefix color |
-| `/magictags personal info <player/steamid>` | View personal prefix details |
-| `/magictags personal clear <player/steamid>` | Remove a personal prefix |
-| `/magictags reload` | Reload configuration and data |
-| `/magictags sync` | Force refresh all online players |
+| `/magictags help` | Show command help |
+| `/magictags info` | Show plugin status |
+| `/magictags config` | Show the active configuration summary |
+| `/magictags hide` | Hide your own prefix |
+| `/magictags show` | Show your own prefix again |
+| `/magictags mhide [on\|off\|toggle\|full]` | Hide other players' prefixes locally |
+| `/magictags mshow` | Show other players' prefixes again |
+| `/magictags range <10-40\|off>` | Change your personal prefix viewing distance |
+| `/magictags prefix <text>` | Set your personal prefix |
+| `/magictags color <#hex>` | Set your personal prefix color |
+| `/magictags clear` | Clear personal prefix settings |
 
-Alias: `/mtags` can be used instead of `/magictags`.
+### Admin commands
+
+| Command | Description |
+| --- | --- |
+| `/magictags list [page]` | List configured prefix rules |
+| `/magictags addrule <key> <permission\|group\|any> <access> <text> [color] [size] [priority] [alwaysVisible]` | Add a new rule |
+| `/magictags setrule <key> <field> <value>` | Update a rule |
+| `/magictags removerule <key>` | Remove a rule |
+| `/magictags reload` | Reload config and data |
+| `/magictags sync` | Force a full refresh of online players |
 
 ## Permissions
 
-| Permission | Description |
+| Permission | Purpose |
 | --- | --- |
-| `magictags.manage` | Access to add / set / remove / list / sync commands |
-| `magictags.reload` | Access to the reload command |
-| `magictags.personal` | Access to personal prefix commands |
-| `magictags.info` | Access to the info command |
+| `magictags.view` | Required only when the config enables permission-gated viewing |
+| `magictags.hide` | Allows hiding your own tag |
+| `magictags.customprefix` | Allows setting a personal prefix |
+| `magictags.customcolor` | Allows setting a personal prefix color |
+| `magictags.manage` | Allows rule management and sync actions |
+| `magictags.reload` | Allows runtime reload |
+
+Dynamic rule permissions are registered automatically from the config, for example `magictags.vip` or `magictags.staff`.
 
 ## Configuration
 
-MagicTags creates its configuration file automatically on the first load.  
-Main settings:
+The plugin creates and normalizes its config automatically. The default values are tuned for public server use.
 
-### General Settings
+### Core defaults
+
 ```json
 {
   "General": {
-    "Update interval (seconds)": 0.5,
-    "Max display name length (characters)": 32,
-    "Show overhead prefix to self": false,
-    "Log debug info": false
+    "Enabled": true,
+    "Update Interval (Seconds)": 0.5,
+    "View Distance (Meters)": 30.0,
+    "Player Minimum View Distance (Meters)": 10.0,
+    "Player Maximum View Distance (Meters)": 40.0,
+    "Text Lifetime (Seconds)": 0.75,
+    "Text Height Offset": 2.15,
+    "Show Tags To Self": false,
+    "Require Permission To See Tags": false,
+    "Require Admin Flag For Radar Mode": true,
+    "Allow Player Range Control": true,
+    "Use Chat Prefix": true,
+    "Debug Logging": false
   }
 }
 ```
 
-### Default Prefix
+### Prefix styles
+
+- **Default Prefix** is used when no rule matches.
+- **Admin Prefix** is shown for admins and is `AlwaysVisible` by default.
+- **Prefixes** is a list of dynamic rules using permissions, groups, or either one.
+
+Recommended sizes:
+- Default text size: **12**
+- Admin text size: **12**
+- Custom rule size range: **10-24**
+
+### Example rule
+
 ```json
 {
-  "Default Prefix": {
-    "Enabled": true,
-    "Overhead prefix": "[Player]",
-    "Overhead prefix color": "#a0a0a0",
-    "Overhead name color": "#ffffff",
-    "Chat prefix": "",
-    "Chat prefix color": "#ffffff"
-  }
+  "Key": "vip",
+  "Enabled": true,
+  "Priority": 10,
+  "Type": "Permission",
+  "Access": "magictags.vip",
+  "Text": "[VIP]",
+  "Color": "#ff66cc",
+  "Size": 12,
+  "AlwaysVisible": false
 }
 ```
 
-### Prefixes List
-```json
-"Prefixes": [
-  {
-    "Key": "admin",
-    "Permission / Group suffix": "admin",
-    "Type": "Permission",
-    "Enabled": true,
-    "Priority": 100,
-    "Overhead prefix": "[Admin]",
-    "Overhead prefix color": "#ff4444",
-    "Overhead name color": "#ffffff",
-    "Chat prefix": "[Admin]",
-    "Chat prefix color": "#ff4444"
-  }
-]
-```
+### Visibility behavior
 
-**Note:**  
-- `Type` can be `Permission` or `Group`.  
-- If the suffix matches an Oxide group, it is automatically treated as a group even if `Type` is set to `Permission`.  
-- Personal prefixes are stored in `oxide/data/MagicTags_Data.json`.
+- `mhide` only changes what the local player sees.
+- Other players still see that user's prefix normally.
+- `AlwaysVisible` rules are shown even when a player hides other tags.
+- The admin prefix is configured as always visible by default.
 
-## How It Works
+## Data file
 
-When a player spawns or their permissions change, MagicTags:
+Player-specific settings are stored in:
 
-1. Checks for a personal prefix (data file) – if enabled, uses it immediately.
-2. Otherwise, scans the configured prefix list, ordered by priority (highest first).
-3. Finds the first prefix where the player has the required permission or belongs to the Oxide group.
-4. If no match is found, the global default prefix is applied (if enabled).
-5. Builds the final `displayName` respecting the `Max display name length` liApache License 2.0.
-6. On chat messages, the plugin injects the chat prefix using the `OnPlayerChat` hook.
-
-A refresh timer periodically recalculates prefixes only for players whose resolved prefix has actually changed, minimising network updates.
-
-## Update System
-
-MagicTags automatically checks for updates from the official GitHub repository on server startup.
-
-Update rules:
-- Only stable version numbers (e.g., `1.0.0`) are considered.
-- Development versions (like `d1.0.1` or containing `-dev`) are ignored.
-- The plugin updates only if the remote version is strictly greater than the local one.
-- After a successful download, the plugin reloads itself automatically.
-
-The update source URL is embedded in the plugin code and points to:  
-`https://raw.githubusercontent.com/whitecristafer/MagicTags/main/MagicTags.cs`
+`oxide/data/MagicTags_Data.json`
 
 ## Installation
 
-1. Download `MagicTags.cs` and place it into the `oxide/plugins` folder.
-2. Restart the server or run `oxide.reload MagicTags`.
-3. The plugin will generate the default configuration and data files.
-4. Adjust `oxide/config/MagicTags.json` to your needs.
-5. Grant permissions to your staff (e.g., `oxide.grant group admin magictags.manage`).
-
-## Localization
-
-Built‑in languages:
-- English
-- Russian
-
-The plugin uses Oxide's localization system; language files can be extended by adding additional languages in the `lang` directory.
-
-## Logging
-
-MagicTags writes start‑up banner, configuration loading info, update check results, and (if enabled) debug messages to the server console.  
-All messages are prefixed with `[MagicPrefix]` for easy filtering.
-
-## Requirements
-
-- Rust dedicated server
-- Oxide/uMod (latest version recommended)
-- C# plugin support
+1. Put `MagicTags.cs` into `oxide/plugins`.
+2. Start the server or run `oxide.reload MagicTags`.
+3. Adjust the config if needed.
+4. Grant permissions for custom prefix or management commands.
+5. Add your own rules using `/magictags addrule` or by editing the config.
 
 ## Notes
 
-- Overhead prefix colors work only if the server allows rich text in display names (enabled by default in vanilla Rust).
-- The max display name length applies to the final string **after** adding color tags; truncation may remove part of the prefix or name.
-- Personal prefixes are stored per SteamID and persist across server restarts.
+- This release keeps the localization layer English-only.
+- Config files are normalized automatically when the plugin loads.
+- A config migration triggers a save and runtime refresh.
+- The plugin uses overhead `ddraw.text` rendering, so the visual layer stays separate from player names.
 
 ## License
 
-This project is open‑source. Released under the Apache License 2.0 License. See `LICENSE` for full details.
+This project is released under the Apache License 2.0. See `LICENSE` for the full text.
+
+<div align="center">
+  <sub>Created with ❤️ the INFUNV STUDIO</sub>
+</div>

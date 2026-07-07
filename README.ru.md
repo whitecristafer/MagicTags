@@ -1,185 +1,167 @@
 # MagicTags
 
-[English](README.md) | [Русский](README.ru.md)
+[Русский](README.ru.md)
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](#)
 [![Status](https://img.shields.io/badge/status-stable-green.svg)](#)
 [![Rust](https://img.shields.io/badge/game-Rust-orange.svg)](#)
 [![Oxide](https://img.shields.io/badge/framework-Oxide%20%2F%20uMod-yellow.svg)](#)
 [![Language](https://img.shields.io/badge/language-C%23-239120.svg)](#)
-[![License](https://img.shields.io/badge/license-Apache License 2.0-lightgrey.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%20License%202.0-lightgrey.svg)](LICENSE)
 
-MagicTags — плагин для Rust (Oxide/uMod), управляющий префиксами для IQPermissions, TimedPermissions и групп Oxide. Поддерживает префиксы над головой (displayName), в чате, персональные переопределения и автоматическое обновление из GitHub‑репозитория. Разработчик — **whitecristafer**, при спонсорстве **infunv.ru** для проекта **evolve.infunv.ru**.
+MagicTags is a Rust plugin for Oxide/uMod that shows configurable overhead tags and chat prefixes without rewriting player display names. It supports per-player custom prefixes, hidden tags, permission-based visibility, team and admin labels, multilingual chat output, and a clean visual style for server communities.
 
-## Обзор
+The plugin is designed for servers that want:
 
-MagicTags даёт администраторам полный контроль над префиксами игроков как над головой, так и в чате. Плагин автоматически собирает права и группы, применяет префиксы по приоритету и позволяет хранить личные префиксы в файлах данных.  
+- overhead tag rendering through `ddraw.text`
+- chat prefixes with a custom chat icon
+- per-permission and per-group tag styling
+- personal prefix overrides for trusted players
+- player-controlled hide/show support
+- global visibility distance in the configuration
+- English and Russian localization
 
-Плагин подходит для серверов, которым нужны:
+## Features
 
-- Динамические префиксы на основе прав
-- Отображение над головой с поддержкой цветов
-- Префиксы в чате без изменения других плагинов
-- Персональные префиксы для доверенных игроков
-- Простой унифицированный интерфейс команд
-- Автоматическая проверка обновлений из официального репозитория
+- Overhead tags rendered separately from `displayName`
+- Chat prefixes with the configured plugin icon
+- Global view distance for overhead tag rendering
+- Per-player hidden tag state
+- Custom personal prefix and prefix color
+- Permission-based admin/team/default tag styles
+- Support for Russian and English messages
+- Simple admin and player command set
+- Safe config/data generation on first start
+- Clean and flexible configuration structure
 
-## Возможности
+## Commands
 
-- Раздельные префиксы над головой (displayName) и в чате
-- Определение префиксов для отдельных прав и групп
-- Глобальный префикс по умолчанию для игроков без особых прав
-- Система приоритетов – используется префикс с наивысшим приоритетом
-- Хранение личных префиксов в папке `data/` – переопределяет все остальные
-- Автоматическое создание конфигурации и данных при первом запуске
-- Автоматическая проверка обновлений с GitHub
-- Учитываются только стабильные версии, тестовые сборки игнорируются
-- Настраиваемая максимальная длина отображаемого имени
-- Локализация на английском и русском языках
-- Чистое логирование в консоль с тегом `MagicPrefix`
-- Умный таймер обновления – обновляет игроков только при реальном изменении префикса
-
-## Команды
-
-| Команда | Описание |
+| Command | Description |
 | --- | --- |
-| `/magictags help` | Показать справку |
-| `/magictags info` | Информация о плагине |
-| `/magictags list [страница]` | Список настроенных префиксов |
-| `/magictags add <ключ> <суффикс> [тип:perm/group]` | Добавить новый префикс |
-| `/magictags set <ключ> <поле> <значение>` | Изменить существующий префикс |
-| `/magictags remove <ключ>` | Удалить префикс |
-| `/magictags personal set <игрок/steamid> <текст>` | Установить личный префикс над головой |
-| `/magictags personal color <игрок/steamid> <hex>` | Задать цвет личного префикса |
-| `/magictags personal info <игрок/steamid>` | Посмотреть данные личного префикса |
-| `/magictags personal clear <игрок/steamid>` | Удалить личный префикс |
-| `/magictags reload` | Перезагрузить конфигурацию и данные |
-| `/magictags sync` | Принудительно обновить всех игроков |
+| `/magictags help` | Show help |
+| `/magictags info` | Show plugin information |
+| `/magictags hide` | Hide your own tag |
+| `/magictags show` | Show your own tag |
+| `/magictags prefix <text>` | Set your personal prefix |
+| `/magictags color <#hex>` | Set your personal prefix color |
+| `/magictags clear` | Clear personal prefix data |
+| `/magictags personal <set|color|hide|show|clear|info> <player/steamid> [value]` | Admin personal tag tools |
+| `/magictags sync` | Refresh all online players |
+| `/magictags reload` | Reload config and data |
 
-Алиас: `/mtags` вместо `/magictags`.
+Alias: `/mtags`
 
-## Права
+## Permissions
 
-| Право | Описание |
+| Permission | Description |
 | --- | --- |
-| `magictags.manage` | Доступ к командам add / set / remove / list / sync |
-| `magictags.reload` | Доступ к команде reload |
-| `magictags.personal` | Доступ к управлению личными префиксами |
-| `magictags.info` | Доступ к команде info |
+| `magictags.see` | Allows the player to receive overhead tag rendering |
+| `magictags.hide` | Allows the player to hide their tag |
+| `magictags.customprefix` | Allows the player to set a custom prefix |
+| `magictags.customcolor` | Allows the player to set a custom prefix color |
+| `magictags.personal` | Allows access to admin personal tag commands |
+| `magictags.reload` | Allows plugin reload |
+| `magictags.manage` | Allows sync and management actions |
+| `magictags.admin` | Full admin-style access and admin tag style |
 
-## Конфигурация
+## Configuration
 
-MagicTags автоматически создаёт конфигурационный файл при первом запуске.  
-Основные настройки:
+MagicTags creates its configuration automatically on first load.
 
-### Общие настройки
+### Settings
 ```json
 {
-  "General": {
+  "Settings": {
+    "Enabled": true,
     "Update interval (seconds)": 0.5,
-    "Max display name length (characters)": 32,
-    "Show overhead prefix to self": false,
-    "Log debug info": false
+    "View distance (meters)": 60.0,
+    "Text lifetime (seconds)": 0.75,
+    "Text height offset": 2.15,
+    "Show tags to self": false,
+    "Show only for permission": true,
+    "Require admin flag for radar mode": true,
+    "Use team prefix": true,
+    "Default prefix text": "[PLAYER]",
+    "Default prefix color": "#cfcfcf",
+    "Admin prefix text": "[ADMIN]",
+    "Admin prefix color": "#ff66ff",
+    "Team prefix text": "[TEAM]",
+    "Team prefix color": "#66ccff",
+    "Custom prefix color default": "#ff66cc",
+    "Log debug": false
   }
 }
 ```
 
-### Префикс по умолчанию
+### Example
 ```json
 {
-  "Default Prefix": {
+  "Settings": {
     "Enabled": true,
-    "Overhead prefix": "[Player]",
-    "Overhead prefix color": "#a0a0a0",
-    "Overhead name color": "#ffffff",
-    "Chat prefix": "",
-    "Chat prefix color": "#ffffff"
+    "Update interval (seconds)": 0.5,
+    "View distance (meters)": 60.0,
+    "Text lifetime (seconds)": 0.75,
+    "Text height offset": 2.15,
+    "Show tags to self": false,
+    "Show only for permission": true,
+    "Require admin flag for radar mode": true,
+    "Use team prefix": true,
+    "Default prefix text": "[PLAYER]",
+    "Default prefix color": "#cfcfcf",
+    "Admin prefix text": "[ADMIN]",
+    "Admin prefix color": "#ff66ff",
+    "Team prefix text": "[TEAM]",
+    "Team prefix color": "#66ccff",
+    "Custom prefix color default": "#ff66cc",
+    "Log debug": false
   }
 }
 ```
 
-### Список префиксов
-```json
-"Prefixes": [
-  {
-    "Key": "admin",
-    "Permission / Group suffix": "admin",
-    "Type": "Permission",
-    "Enabled": true,
-    "Priority": 100,
-    "Overhead prefix": "[Admin]",
-    "Overhead prefix color": "#ff4444",
-    "Overhead name color": "#ffffff",
-    "Chat prefix": "[Admin]",
-    "Chat prefix color": "#ff4444"
-  }
-]
-```
+## How It Works
 
-**Важно:**  
-- `Type` может быть `Permission` или `Group`.  
-- Если суффикс совпадает с группой Oxide, он автоматически считается группой, даже если указан `Permission`.  
-- Личные префиксы хранятся в `oxide/data/MagicTags_Data.json`.
+MagicTags does not replace a player's `displayName`. Instead, it draws overhead tags directly to clients using `ddraw.text`.
 
-## Как это работает
+The plugin logic is simple:
 
-Когда игрок появляется или его права изменяются, MagicTags:
+1. It checks whether the viewer has permission to see tags.
+2. It reads the target's personal data first.
+3. If no personal override exists, it falls back to admin, team, or default styles.
+4. It renders the text above the target player within the configured view distance.
+5. In chat, the plugin adds a prefix using the configured chat icon.
 
-1. Проверяет личный префикс (из файла данных) — если включён, сразу использует его.
-2. Иначе просматривает список настроенных префиксов, отсортированный по приоритету.
-3. Находит первый префикс, для которого у игрока есть нужное право или членство в Oxide‑группе.
-4. Если совпадений нет, применяется глобальный префикс по умолчанию (если включён).
-5. Формирует итоговый `displayName` с учётом ограничения `Max display name length`.
-6. В чате плагин добавляет префикс через хук `OnPlayerChat`.
+This makes the plugin safer for compatibility with other plugins because the real player name is not rewritten.
 
-Фоновый таймер обновляет префиксы только у тех игроков, чьи данные действительно изменились, минимизируя нагрузку на сеть.
+## Localization
 
-## Система обновлений
+Built-in languages:
 
-MagicTags автоматически проверяет обновления из официального GitHub‑репозитория при старте сервера.
+- English
+- Russian
 
-Правила обновления:
-- Учитываются только стабильные версии (например, `1.0.0`).
-- Тестовые сборки (вида `d1.0.1` или содержащие `-dev`) игнорируются.
-- Плагин обновляется только если удалённая версия строго больше локальной.
-- После успешной загрузки плагин перезагружается автоматически.
+Language messages are registered through Oxide's localization system. Additional languages can be added in the usual Oxide language file structure.
 
-URL источника обновлений зашит в коде и указывает на:  
-`https://raw.githubusercontent.com/whitecristafer/MagicTags/main/MagicTags.cs`
+## Installation
 
-## Установка
+1. Place `MagicTags2.cs` into `oxide/plugins`.
+2. Restart the server or run `oxide.reload MagicTags`.
+3. The plugin will generate its configuration and data files automatically.
+4. Adjust the configuration to fit your server style.
+5. Grant permissions to your staff or trusted players.
 
-1. Скачайте `MagicTags.cs` и поместите его в папку `oxide/plugins`.
-2. Перезапустите сервер или выполните `oxide.reload MagicTags`.
-3. Плагин создаст конфигурацию и файлы данных по умолчанию.
-4. Настройте `oxide/config/MagicTags.json` под свои нужды.
-5. Выдайте права администраторам (например, `oxide.grant group admin magictags.manage`).
+## Data File
 
-## Локализация
+Personal tag settings are stored in:
 
-Встроенные языки:
-- Английский
-- Русский
+`oxide/data/MagicTags_Data.json`
 
-Плагин использует систему локализации Oxide; при необходимости можно добавить другие языки, расширив файлы в папке `lang`.
+## Notes
 
-## Логирование
+- Overhead text depends on the client-side debug draw method used by Rust.
+- The `Require admin flag for radar mode` setting controls whether temporary admin-style viewing is enabled for radar-like rendering.
+- Personal prefix colors should be valid hex colors, for example `#ff66cc`.
+- The plugin icon used in chat is configurable in the source and can be replaced with your own SteamID.
 
-MagicTags выводит в консоль стартовый баннер, информацию о загрузке конфигурации, результаты проверки обновлений и (при включении) отладочные сообщения.  
-Все сообщения помечаются префиксом `[MagicPrefix]` для удобного поиска.
+## License
 
-## Требования
-
-- Выделенный сервер Rust
-- Oxide/uMod (рекомендуется последняя версия)
-- Поддержка C# плагинов
-
-## Примечания
-
-- Цвета префиксов над головой работают, только если сервер разрешает rich‑текст в displayName (по умолчанию разрешено).
-- Ограничение длины имени применяется к строке **после** добавления цветовых тегов; при усечении может быть удалена часть префикса или имени.
-- Личные префиксы хранятся по SteamID и сохраняются между перезапусками.
-
-## Лицензия
-
-Проект с открытым исходным кодом. Распространяется под лицензией Apache License 2.0. Подробности в файле `LICENSE`.
+This project is open-source and released under the Apache License 2.0. See `LICENSE` for details.
