@@ -1,167 +1,155 @@
 # MagicTags
 
-[Русский](README.ru.md)
-
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](#)
-[![Status](https://img.shields.io/badge/status-stable-green.svg)](#)
-[![Rust](https://img.shields.io/badge/game-Rust-orange.svg)](#)
-[![Oxide](https://img.shields.io/badge/framework-Oxide%20%2F%20uMod-yellow.svg)](#)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](#)
+[![Status](https://img.shields.io/badge/status-release-green.svg)](#)
+[![Game](https://img.shields.io/badge/game-Rust-orange.svg)](#)
+[![Framework](https://img.shields.io/badge/framework-Oxide%20%2F%20uMod-yellow.svg)](#)
 [![Language](https://img.shields.io/badge/language-C%23-239120.svg)](#)
-[![License](https://img.shields.io/badge/license-Apache%20License%202.0-lightgrey.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-lightgrey.svg)](LICENSE)
 
-MagicTags is a Rust plugin for Oxide/uMod that shows configurable overhead tags and chat prefixes without rewriting player display names. It supports per-player custom prefixes, hidden tags, permission-based visibility, team and admin labels, multilingual chat output, and a clean visual style for server communities.
+MagicTags is a Rust plugin for Oxide/uMod that renders overhead prefixes without rewriting player names. It supports personal prefixes, permission-based and group-based rules, admin prefixes that stay visible even when a player hides other tags, local visibility controls, and a clean chat presentation.
 
-The plugin is designed for servers that want:
+## What this release focuses on
 
-- overhead tag rendering through `ddraw.text`
-- chat prefixes with a custom chat icon
-- per-permission and per-group tag styling
-- personal prefix overrides for trusted players
-- player-controlled hide/show support
-- global visibility distance in the configuration
-- English and Russian localization
-
-## Features
-
-- Overhead tags rendered separately from `displayName`
-- Chat prefixes with the configured plugin icon
-- Global view distance for overhead tag rendering
-- Per-player hidden tag state
-- Custom personal prefix and prefix color
-- Permission-based admin/team/default tag styles
-- Support for Russian and English messages
-- Simple admin and player command set
-- Safe config/data generation on first start
-- Clean and flexible configuration structure
+- Clean English-only localization
+- Optimized refresh flow and config normalization
+- Local `mhide` / `mshow` controls for the viewer only
+- Per-player local distance control inside a strict config range
+- Default global view distance set to **30 meters**
+- Admin prefixes with `AlwaysVisible` support
+- Dynamic permission and group rule handling
+- Runtime config reload and data reload
+- Ready-to-ship Apache 2.0 open-source release
 
 ## Commands
 
+Alias: `/mtags`
+
+### Player commands
+
 | Command | Description |
 | --- | --- |
-| `/magictags help` | Show help |
-| `/magictags info` | Show plugin information |
-| `/magictags hide` | Hide your own tag |
-| `/magictags show` | Show your own tag |
+| `/magictags help` | Show command help |
+| `/magictags info` | Show plugin status |
+| `/magictags config` | Show the active configuration summary |
+| `/magictags hide` | Hide your own prefix |
+| `/magictags show` | Show your own prefix again |
+| `/magictags mhide [on\|off\|toggle\|full]` | Hide other players' prefixes locally |
+| `/magictags mshow` | Show other players' prefixes again |
+| `/magictags range <10-40\|off>` | Change your personal prefix viewing distance |
 | `/magictags prefix <text>` | Set your personal prefix |
 | `/magictags color <#hex>` | Set your personal prefix color |
-| `/magictags clear` | Clear personal prefix data |
-| `/magictags personal <set|color|hide|show|clear|info> <player/steamid> [value]` | Admin personal tag tools |
-| `/magictags sync` | Refresh all online players |
-| `/magictags reload` | Reload config and data |
+| `/magictags clear` | Clear personal prefix settings |
 
-Alias: `/mtags`
+### Admin commands
+
+| Command | Description |
+| --- | --- |
+| `/magictags list [page]` | List configured prefix rules |
+| `/magictags addrule <key> <permission\|group\|any> <access> <text> [color] [size] [priority] [alwaysVisible]` | Add a new rule |
+| `/magictags setrule <key> <field> <value>` | Update a rule |
+| `/magictags removerule <key>` | Remove a rule |
+| `/magictags reload` | Reload config and data |
+| `/magictags sync` | Force a full refresh of online players |
 
 ## Permissions
 
-| Permission | Description |
+| Permission | Purpose |
 | --- | --- |
-| `magictags.see` | Allows the player to receive overhead tag rendering |
-| `magictags.hide` | Allows the player to hide their tag |
-| `magictags.customprefix` | Allows the player to set a custom prefix |
-| `magictags.customcolor` | Allows the player to set a custom prefix color |
-| `magictags.personal` | Allows access to admin personal tag commands |
-| `magictags.reload` | Allows plugin reload |
-| `magictags.manage` | Allows sync and management actions |
-| `magictags.admin` | Full admin-style access and admin tag style |
+| `magictags.view` | Required only when the config enables permission-gated viewing |
+| `magictags.hide` | Allows hiding your own tag |
+| `magictags.customprefix` | Allows setting a personal prefix |
+| `magictags.customcolor` | Allows setting a personal prefix color |
+| `magictags.manage` | Allows rule management and sync actions |
+| `magictags.reload` | Allows runtime reload |
+
+Dynamic rule permissions are registered automatically from the config, for example `magictags.vip` or `magictags.staff`.
 
 ## Configuration
 
-MagicTags creates its configuration automatically on first load.
+The plugin creates and normalizes its config automatically. The default values are tuned for public server use.
 
-### Settings
+### Core defaults
+
 ```json
 {
-  "Settings": {
+  "General": {
     "Enabled": true,
-    "Update interval (seconds)": 0.5,
-    "View distance (meters)": 60.0,
-    "Text lifetime (seconds)": 0.75,
-    "Text height offset": 2.15,
-    "Show tags to self": false,
-    "Show only for permission": true,
-    "Require admin flag for radar mode": true,
-    "Use team prefix": true,
-    "Default prefix text": "[PLAYER]",
-    "Default prefix color": "#cfcfcf",
-    "Admin prefix text": "[ADMIN]",
-    "Admin prefix color": "#ff66ff",
-    "Team prefix text": "[TEAM]",
-    "Team prefix color": "#66ccff",
-    "Custom prefix color default": "#ff66cc",
-    "Log debug": false
+    "Update Interval (Seconds)": 0.5,
+    "View Distance (Meters)": 30.0,
+    "Player Minimum View Distance (Meters)": 10.0,
+    "Player Maximum View Distance (Meters)": 40.0,
+    "Text Lifetime (Seconds)": 0.75,
+    "Text Height Offset": 2.15,
+    "Show Tags To Self": false,
+    "Require Permission To See Tags": false,
+    "Require Admin Flag For Radar Mode": true,
+    "Allow Player Range Control": true,
+    "Use Chat Prefix": true,
+    "Debug Logging": false
   }
 }
 ```
 
-### Example
+### Prefix styles
+
+- **Default Prefix** is used when no rule matches.
+- **Admin Prefix** is shown for admins and is `AlwaysVisible` by default.
+- **Prefixes** is a list of dynamic rules using permissions, groups, or either one.
+
+Recommended sizes:
+- Default text size: **12**
+- Admin text size: **12**
+- Custom rule size range: **10-24**
+
+### Example rule
+
 ```json
 {
-  "Settings": {
-    "Enabled": true,
-    "Update interval (seconds)": 0.5,
-    "View distance (meters)": 60.0,
-    "Text lifetime (seconds)": 0.75,
-    "Text height offset": 2.15,
-    "Show tags to self": false,
-    "Show only for permission": true,
-    "Require admin flag for radar mode": true,
-    "Use team prefix": true,
-    "Default prefix text": "[PLAYER]",
-    "Default prefix color": "#cfcfcf",
-    "Admin prefix text": "[ADMIN]",
-    "Admin prefix color": "#ff66ff",
-    "Team prefix text": "[TEAM]",
-    "Team prefix color": "#66ccff",
-    "Custom prefix color default": "#ff66cc",
-    "Log debug": false
-  }
+  "Key": "vip",
+  "Enabled": true,
+  "Priority": 10,
+  "Type": "Permission",
+  "Access": "magictags.vip",
+  "Text": "[VIP]",
+  "Color": "#ff66cc",
+  "Size": 12,
+  "AlwaysVisible": false
 }
 ```
 
-## How It Works
+### Visibility behavior
 
-MagicTags does not replace a player's `displayName`. Instead, it draws overhead tags directly to clients using `ddraw.text`.
+- `mhide` only changes what the local player sees.
+- Other players still see that user's prefix normally.
+- `AlwaysVisible` rules are shown even when a player hides other tags.
+- The admin prefix is configured as always visible by default.
 
-The plugin logic is simple:
+## Data file
 
-1. It checks whether the viewer has permission to see tags.
-2. It reads the target's personal data first.
-3. If no personal override exists, it falls back to admin, team, or default styles.
-4. It renders the text above the target player within the configured view distance.
-5. In chat, the plugin adds a prefix using the configured chat icon.
-
-This makes the plugin safer for compatibility with other plugins because the real player name is not rewritten.
-
-## Localization
-
-Built-in languages:
-
-- English
-- Russian
-
-Language messages are registered through Oxide's localization system. Additional languages can be added in the usual Oxide language file structure.
-
-## Installation
-
-1. Place `MagicTags2.cs` into `oxide/plugins`.
-2. Restart the server or run `oxide.reload MagicTags`.
-3. The plugin will generate its configuration and data files automatically.
-4. Adjust the configuration to fit your server style.
-5. Grant permissions to your staff or trusted players.
-
-## Data File
-
-Personal tag settings are stored in:
+Player-specific settings are stored in:
 
 `oxide/data/MagicTags_Data.json`
 
+## Installation
+
+1. Put `MagicTags.cs` into `oxide/plugins`.
+2. Start the server or run `oxide.reload MagicTags`.
+3. Adjust the config if needed.
+4. Grant permissions for custom prefix or management commands.
+5. Add your own rules using `/magictags addrule` or by editing the config.
+
 ## Notes
 
-- Overhead text depends on the client-side debug draw method used by Rust.
-- The `Require admin flag for radar mode` setting controls whether temporary admin-style viewing is enabled for radar-like rendering.
-- Personal prefix colors should be valid hex colors, for example `#ff66cc`.
-- The plugin icon used in chat is configurable in the source and can be replaced with your own SteamID.
+- This release keeps the localization layer English-only.
+- Config files are normalized automatically when the plugin loads.
+- A config migration triggers a save and runtime refresh.
+- The plugin uses overhead `ddraw.text` rendering, so the visual layer stays separate from player names.
 
 ## License
 
-This project is open-source and released under the Apache License 2.0. See `LICENSE` for details.
+This project is released under the Apache License 2.0. See `LICENSE` for the full text.
+
+<div align="center">
+  <sub>Created with ❤️ the INFUNV STUDIO</sub>
+</div>
