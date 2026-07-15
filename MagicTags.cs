@@ -10,11 +10,12 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Oxide.Core;
+using Oxide.Game.Rust.Cui;
 using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("MagicTags", "whitecristafer", "3.0.1")]
+    [Info("MagicTags", "whitecristafer", "3.0.3-BETA")]
     [Description("Configurable overhead prefixes with per-player visibility controls, dynamic rules, and clean chat formatting.")]
     public class MagicTags : RustPlugin
     {
@@ -32,10 +33,16 @@ namespace Oxide.Plugins
         private const string DefaultChatLabel = "MagicTags";
         private const ulong DefaultChatIconId = 76561198209258869UL;
 
+        // Constants for manual projection
+        private const float OverheadFovDegrees = 60f;        // Standard FOV in Rust
+        private const float OverheadAspectRatio = 1.7777778f; // 16:9
+
         private PluginConfig _config;
         private StoredData _data;
         private Timer _refreshTimer;
-        private readonly HashSet<ulong> _temporaryAdminFlags = new HashSet<ulong>();
+
+        // CUI – we use the usual game UI, without the admin flag
+        private const string OverheadPanelName = "MagicTags.Overhead";
 
         #region Configuration
 
@@ -101,9 +108,6 @@ namespace Oxide.Plugins
 
             [JsonProperty("Require Permission To See Tags")]
             public bool RequirePermissionToSeeTags = false;
-
-            [JsonProperty("Require Admin Flag For Radar Mode")]
-            public bool RequireAdminFlagForRadarMode = true;
 
             [JsonProperty("Allow Player Range Control")]
             public bool AllowPlayerRangeControl = true;
@@ -554,9 +558,8 @@ namespace Oxide.Plugins
                                     "Text lifetime: {12:0.##}s\n" +
                                     "Text height offset: {13:0.##}\n" +
                                     "Require permission to see tags: {14}\n" +
-                                    "Require admin flag for radar mode: {15}\n" +
-                                    "Player range control: {16}\n" +
-                                    "Rules: {17}",
+                                    "Player range control: {15}\n" +
+                                    "Rules: {16}",
                 ["HiddenOwnOn"] = "Your own tag is now hidden.",
                 ["HiddenOwnOff"] = "Your own tag is now visible again.",
                 ["ViewerHideOn"] = "You will no longer see other players' prefixes.",
@@ -605,7 +608,7 @@ namespace Oxide.Plugins
                 _refreshTimer = null;
             }
 
-            RemoveTemporaryAdminFlags();
+            ClearAllOverheadUi();
             SaveData();
         }
 
@@ -630,7 +633,8 @@ namespace Oxide.Plugins
                 return;
             }
 
-            _temporaryAdminFlags.Remove(player.userID);
+            // The client's UI is already destroyed by discounting, but we are cleaning our local tracker.
+            // (not necessary, but we'll leave it for the sake of order)
         }
 
         private void OnUserGroupAdded(string id, string groupName)
@@ -682,7 +686,7 @@ namespace Oxide.Plugins
         private void CCmdMagicTags(ConsoleSystem.Arg arg)
         {
             BasePlayer player = arg.Player();
-            string[] args = arg.Args?.Select(a => a.ToString()).ToArray() ?? new string[0]; 
+            string[] args = arg.Args?.Select(a => a.ToString()).ToArray() ?? new string[0];
             HandleCommand(player, args);
         }
 
@@ -731,7 +735,6 @@ namespace Oxide.Plugins
                         _config.General.TextLifetime,
                         _config.General.TextHeightOffset,
                         _config.General.RequirePermissionToSeeTags,
-                        _config.General.RequireAdminFlagForRadarMode,
                         _config.General.AllowPlayerRangeControl,
                         GetRuleCount());
                     return;
@@ -1448,29 +1451,144 @@ namespace Oxide.Plugins
             }
         }
 
-        private void DrawTag(BasePlayer viewer, BasePlayer target)
+        // Draws all the labels for a specific viewer
+        private void DrawTagsForViewer(BasePlayer viewer)
+        {
+            if (viewer == null || !viewer.IsConnected)
+                return;
+
+            if (!ShouldRenderForViewer(viewer))
+                return;
+
+            var container = new CuiElementContainer();
+            // Creating an empty container panel (without a background) - it will hold all the labels.
+            container.Add(new CuiPanel
+            {
+                Image = { Color = "0 0 0 0" },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1" }
+            }, "Overlay", OverheadPanelName);
+
+            int labelIndex = 0;
+            var targets = BasePlayer.activePlayerList;
+            for (int i = 0; i < targets.Count; i++)
+            {
+                BasePlayer target = targets[i];
+                if (target == null || !target.IsConnected)
+                    continue;
+
+                if (TryAddOverheadLabel(viewer, target, container, labelIndex))
+                    labelIndex++;
+            }
+
+            // Deleting the old UI and adding a new one
+            CuiHelper.DestroyUi(viewer, OverheadPanelName);
+            if (container.Count > 1) // if there is at least one label
+            {
+                CuiHelper.AddUi(viewer, container);
+            }
+        }
+
+        // Builds one CUI label for the pair (viewer, target) and adds it to the container.
+        private bool TryAddOverheadLabel(BasePlayer viewer, BasePlayer target, CuiElementContainer container, int elementIndex)
         {
             PrefixVisual visual = ResolvePrefix(target);
             if (visual == null || string.IsNullOrWhiteSpace(visual.Text))
             {
-                return;
+                return false;
             }
 
             if (!ShouldShowToViewer(viewer, target, visual))
             {
-                return;
+                return false;
             }
 
-            Vector3 position = GetViewPosition(target) + new Vector3(0f, _config.General.TextHeightOffset, 0f);
-            Color drawColor;
-            if (!TryParseColor(visual.Color, out drawColor))
+            Vector3 worldPosition = GetViewPosition(target) + new Vector3(0f, _config.General.TextHeightOffset, 0f);
+
+            Vector2 screenPoint;
+            if (!TryWorldToScreen(viewer, worldPosition, out screenPoint))
             {
-                drawColor = Color.white;
+                return false;
             }
 
-            int size = ClampInt(visual.Size, 10, 24, 12);
+            int fontSize = ClampInt(visual.Size, 10, 24, 12);
+            string cuiColor = ToCuiColor(visual.Color);
 
-            viewer.SendConsoleCommand("ddraw.text", _config.General.TextLifetime, drawColor, position, EscapeRichText(visual.Text), size);
+            int halfWidth = Mathf.Clamp(fontSize * 5, 40, 160);
+            int halfHeight = fontSize + 2;
+
+            string anchor = screenPoint.x.ToString("0.####", CultureInfo.InvariantCulture) + " " +
+                             screenPoint.y.ToString("0.####", CultureInfo.InvariantCulture);
+            string elementName = OverheadPanelName + "_label_" + elementIndex.ToString(CultureInfo.InvariantCulture);
+
+            container.Add(new CuiLabel
+            {
+                Text =
+                {
+                    Text = EscapeRichText(visual.Text),
+                    FontSize = fontSize,
+                    Align = TextAnchor.MiddleCenter,
+                    Color = cuiColor
+                },
+                RectTransform =
+                {
+                    AnchorMin = anchor,
+                    AnchorMax = anchor,
+                    OffsetMin = (-halfWidth).ToString(CultureInfo.InvariantCulture) + " " + (-halfHeight).ToString(CultureInfo.InvariantCulture),
+                    OffsetMax = halfWidth.ToString(CultureInfo.InvariantCulture) + " " + halfHeight.ToString(CultureInfo.InvariantCulture)
+                }
+            }, OverheadPanelName, elementName);
+
+            return true;
+        }
+
+        // Manual projection of a world point onto the viewer's screen
+        private bool TryWorldToScreen(BasePlayer viewer, Vector3 worldPosition, out Vector2 screenPoint)
+        {
+            screenPoint = Vector2.zero;
+
+            if (viewer == null || viewer.eyes == null)
+            {
+                return false;
+            }
+
+            Vector3 eyePosition = viewer.eyes.position;
+            Quaternion eyeRotation = viewer.eyes.rotation;
+
+            Vector3 direction = worldPosition - eyePosition;
+            Vector3 local = Quaternion.Inverse(eyeRotation) * direction;
+
+            if (local.z <= 0.15f)
+            {
+                return false;
+            }
+
+            float tanHalfFov = Mathf.Tan(OverheadFovDegrees * Mathf.Deg2Rad * 0.5f);
+
+            float ndcX = local.x / (local.z * tanHalfFov * OverheadAspectRatio);
+            float ndcY = local.y / (local.z * tanHalfFov);
+
+            const float edgeMargin = 0.92f;
+            if (Mathf.Abs(ndcX) > edgeMargin || Mathf.Abs(ndcY) > edgeMargin)
+            {
+                return false;
+            }
+
+            screenPoint = new Vector2((ndcX + 1f) * 0.5f, (ndcY + 1f) * 0.5f);
+            return true;
+        }
+
+        private static string ToCuiColor(string hex, float alpha = 1f)
+        {
+            Color color;
+            if (!TryParseColor(hex, out color))
+            {
+                color = Color.white;
+            }
+
+            return color.r.ToString("0.###", CultureInfo.InvariantCulture) + " " +
+                   color.g.ToString("0.###", CultureInfo.InvariantCulture) + " " +
+                   color.b.ToString("0.###", CultureInfo.InvariantCulture) + " " +
+                   alpha.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
         private Vector3 GetViewPosition(BasePlayer player)
@@ -1491,6 +1609,15 @@ namespace Oxide.Plugins
             }
 
             return Vector3.zero;
+        }
+
+        // Clearing the entire UI for all players
+        private void ClearAllOverheadUi()
+        {
+            foreach (var player in BasePlayer.activePlayerList)
+            {
+                CuiHelper.DestroyUi(player, OverheadPanelName);
+            }
         }
 
         #endregion
@@ -1529,71 +1656,32 @@ namespace Oxide.Plugins
                     continue;
                 }
 
-                RefreshPlayer(viewer);
+                DrawTagsForViewer(viewer);
             }
         }
 
         private void RefreshPlayer(BasePlayer viewer)
         {
             if (viewer == null || !viewer.IsConnected)
-            {
                 return;
-            }
 
-            if (!ShouldRenderForViewer(viewer))
-            {
-                return;
-            }
-
-            bool temporaryAdmin = EnsureTemporaryAdminFlag(viewer);
-
-            var targets = BasePlayer.activePlayerList;
-            for (int i = 0; i < targets.Count; i++)
-            {
-                BasePlayer target = targets[i];
-                if (target == null || !target.IsConnected)
-                {
-                    continue;
-                }
-
-                DrawTag(viewer, target);
-            }
-
-            if (temporaryAdmin)
-            {
-                ScheduleRemoveTemporaryFlag(viewer);
-            }
+            DrawTagsForViewer(viewer);
         }
-
 
         private void RefreshTargetForAllViewers(BasePlayer target)
         {
             if (target == null || !target.IsConnected)
-            {
                 return;
-            }
 
+            // Redrawing all viewers who can see this target
             var viewers = BasePlayer.activePlayerList;
             for (int i = 0; i < viewers.Count; i++)
             {
                 BasePlayer viewer = viewers[i];
                 if (viewer == null || !viewer.IsConnected)
-                {
                     continue;
-                }
 
-                if (!ShouldRenderForViewer(viewer))
-                {
-                    continue;
-                }
-
-                bool temporaryAdmin = EnsureTemporaryAdminFlag(viewer);
-                DrawTag(viewer, target);
-
-                if (temporaryAdmin)
-                {
-                    ScheduleRemoveTemporaryFlag(viewer);
-                }
+                DrawTagsForViewer(viewer);
             }
         }
 
@@ -1695,86 +1783,6 @@ namespace Oxide.Plugins
             }
 
             return permission.UserHasPermission(player.UserIDString, permissionName);
-        }
-
-        #endregion
-
-        #region Temporary Admin Flag
-
-        private bool EnsureTemporaryAdminFlag(BasePlayer player)
-        {
-            if (player == null || _config == null || _config.General == null)
-            {
-                return false;
-            }
-
-            if (!_config.General.RequireAdminFlagForRadarMode)
-            {
-                return false;
-            }
-
-            if (player.IsAdmin)
-            {
-                return false;
-            }
-
-            if (!ShouldRenderForViewer(player))
-            {
-                return false;
-            }
-
-            if (_temporaryAdminFlags.Contains(player.userID))
-            {
-                return false;
-            }
-
-            player.SetPlayerFlag(BasePlayer.PlayerFlags.IsAdmin, true);
-            player.SendNetworkUpdateImmediate();
-            _temporaryAdminFlags.Add(player.userID);
-            return true;
-        }
-
-        private void ScheduleRemoveTemporaryFlag(BasePlayer player)
-        {
-            if (player == null)
-            {
-                return;
-            }
-
-            timer.Once(0.1f, delegate
-            {
-                if (player == null || !player.IsConnected)
-                {
-                    return;
-                }
-
-                if (!_temporaryAdminFlags.Contains(player.userID))
-                {
-                    return;
-                }
-
-                player.SetPlayerFlag(BasePlayer.PlayerFlags.IsAdmin, false);
-                player.SendNetworkUpdateImmediate();
-                _temporaryAdminFlags.Remove(player.userID);
-            });
-        }
-
-        private void RemoveTemporaryAdminFlags()
-        {
-            List<ulong> ids = _temporaryAdminFlags.ToList();
-            for (int i = 0; i < ids.Count; i++)
-            {
-                BasePlayer player = BasePlayer.FindByID(ids[i]);
-                if (player == null)
-                {
-                    continue;
-                }
-
-                player.SetPlayerFlag(BasePlayer.PlayerFlags.IsAdmin, false);
-                player.SendNetworkUpdateImmediate();
-            }
-
-            _temporaryAdminFlags.Clear();
         }
 
         #endregion
@@ -1965,7 +1973,6 @@ namespace Oxide.Plugins
             int result;
             return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out result) ? result : fallback;
         }
-
 
         private static float Clamp(float value, float min, float max, float fallback, ref bool migrated)
         {
