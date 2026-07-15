@@ -28,8 +28,8 @@ namespace Oxide.Plugins
 
         private const string DataFileName = "MagicTags_Data";
         private const int CurrentConfigVersion = 1;
-        private const float MinAllowedRange = 10f;
-        private const float MaxAllowedRange = 40f;
+        private const float MinAllowedRange = 4f;
+        private const float MaxAllowedRange = 12f;
         private const string DefaultChatLabel = "MagicTags";
         private const ulong DefaultChatIconId = 76561198209258869UL;
 
@@ -89,7 +89,7 @@ namespace Oxide.Plugins
             public float UpdateInterval = 0.5f;
 
             [JsonProperty("View Distance (Meters)")]
-            public float ViewDistance = 30f;
+            public float ViewDistance = 6f;
 
             [JsonProperty("Player Minimum View Distance (Meters)")]
             public float PlayerMinimumViewDistance = MinAllowedRange;
@@ -101,7 +101,7 @@ namespace Oxide.Plugins
             public float TextLifetime = 0.75f;
 
             [JsonProperty("Text Height Offset")]
-            public float TextHeightOffset = 2.15f;
+            public float TextHeightOffset = 0.25f;
 
             [JsonProperty("Show Tags To Self")]
             public bool ShowTagsToSelf = false;
