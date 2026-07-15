@@ -10,12 +10,13 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Oxide.Core;
+using Oxide.Core.Plugins;
 using Oxide.Game.Rust.Cui;
 using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("MagicTags", "whitecristafer", "3.0.3-BETA")]
+    [Info("MagicTags", "whitecristafer", "3.1.4-BETA")]
     [Description("Configurable overhead prefixes with per-player visibility controls, dynamic rules, and clean chat formatting.")]
     public class MagicTags : RustPlugin
     {
@@ -23,6 +24,7 @@ namespace Oxide.Plugins
         private const string PermissionHideOwn = "magictags.hide";
         private const string PermissionCustomPrefix = "magictags.customprefix";
         private const string PermissionCustomColor = "magictags.customcolor";
+        private const string PermissionCustomNickname = "magictags.nickname";
         private const string PermissionManage = "magictags.manage";
         private const string PermissionReload = "magictags.reload";
 
@@ -32,14 +34,14 @@ namespace Oxide.Plugins
         private const float MaxAllowedRange = 12f;
         private const string DefaultChatLabel = "MagicTags";
         private const ulong DefaultChatIconId = 76561198209258869UL;
-
-        // Constants for manual projection
-        private const float OverheadFovDegrees = 60f;        // Standard FOV in Rust
-        private const float OverheadAspectRatio = 1.7777778f; // 16:9
+        private const string DefaultDisplayNameFormat = "%magictags_nickname%";
+        private const string DisplayNameNicknameToken = "%magictags_nickname%";
 
         private PluginConfig _config;
         private StoredData _data;
         private Timer _refreshTimer;
+
+        [PluginReference] private Plugin PlaceholderAPI;
 
         // CUI – we use the usual game UI, without the admin flag
         private const string OverheadPanelName = "MagicTags.Overhead";
@@ -114,6 +116,15 @@ namespace Oxide.Plugins
 
             [JsonProperty("Use Chat Prefix")]
             public bool UseChatPrefix = true;
+
+            [JsonProperty("Overhead Field Of View (Degrees)")]
+            public float OverheadFieldOfView = 90f;
+
+            [JsonProperty("Overhead Aspect Ratio")]
+            public float OverheadAspectRatio = 1.7777778f;
+
+            [JsonProperty("Display Name Format")]
+            public string DisplayNameFormat = DefaultDisplayNameFormat;
 
             [JsonProperty("Debug Logging")]
             public bool DebugLogging = false;
@@ -340,6 +351,21 @@ namespace Oxide.Plugins
             _config.General.PlayerMaximumViewDistance = Clamp(_config.General.PlayerMaximumViewDistance, 1f, 500f, MaxAllowedRange, ref migrated);
             _config.General.TextLifetime = Clamp(_config.General.TextLifetime, 0.1f, 10f, 0.75f, ref migrated);
             _config.General.TextHeightOffset = Clamp(_config.General.TextHeightOffset, 0.1f, 20f, 2.15f, ref migrated);
+            _config.General.OverheadFieldOfView = Clamp(_config.General.OverheadFieldOfView, 50f, 120f, 90f, ref migrated);
+            _config.General.OverheadAspectRatio = Clamp(_config.General.OverheadAspectRatio, 1f, 3f, 1.7777778f, ref migrated);
+
+            // The empty line is the conscious choice of the administrator to "hide the nickname from everyone by default",
+            // therefore, we do not substitute fallback here, but only remove null and extra spaces at the edges.
+            if (_config.General.DisplayNameFormat == null)
+            {
+                _config.General.DisplayNameFormat = DefaultDisplayNameFormat;
+                migrated = true;
+            }
+            else if (_config.General.DisplayNameFormat.Trim() != _config.General.DisplayNameFormat)
+            {
+                _config.General.DisplayNameFormat = _config.General.DisplayNameFormat.Trim();
+                migrated = true;
+            }
 
             if (_config.General.PlayerMinimumViewDistance > _config.General.PlayerMaximumViewDistance)
             {
@@ -449,6 +475,9 @@ namespace Oxide.Plugins
             [JsonProperty("Custom Prefix Color")]
             public string CustomPrefixColor = string.Empty;
 
+            [JsonProperty("Custom Display Name")]
+            public string CustomDisplayName = string.Empty;
+
             [JsonProperty("Updated By")]
             public string UpdatedBy = string.Empty;
 
@@ -529,12 +558,13 @@ namespace Oxide.Plugins
                            "/magictags help - show this help text\n" +
                            "/magictags hide - hide your own tag\n" +
                            "/magictags show - show your own tag again\n" +
-                           "/magictags mhide [on|off|toggle] - hide other players' prefixes locally\n" +
-                           "/magictags mshow - show other players' prefixes again\n" +
+                           "/magictags mhide [on|off|toggle] - hide other players' prefixes locally (also available as standalone /mhide)\n" +
+                           "/magictags mshow - show other players' prefixes again (also available as standalone /mshow)\n" +
                            "/magictags range <10-40|off> - set your local prefix viewing distance\n" +
                            "/magictags prefix <text> - set your personal prefix\n" +
                            "/magictags color <#hex> - set your personal prefix color\n" +
-                           "/magictags clear - clear your personal prefix settings\n" +
+                           "/magictags nick <text|off> - set or clear your personal display name\n" +
+                           "/magictags clear - clear your personal prefix/color/nickname settings\n" +
                            "/magictags list [page] - list configured prefix rules\n" +
                            "/magictags addrule <key> <permission|group|any> <access> <text> [color] [size] [priority] [alwaysVisible]\n" +
                            "/magictags setrule <key> <field> <value>\n" +
@@ -559,7 +589,9 @@ namespace Oxide.Plugins
                                     "Text height offset: {13:0.##}\n" +
                                     "Require permission to see tags: {14}\n" +
                                     "Player range control: {15}\n" +
-                                    "Rules: {16}",
+                                    "Overhead FOV/aspect (CUI): {16:0.##}\u00b0 / {17:0.###}\n" +
+                                    "Display name format: {18}\n" +
+                                    "Rules: {19}",
                 ["HiddenOwnOn"] = "Your own tag is now hidden.",
                 ["HiddenOwnOff"] = "Your own tag is now visible again.",
                 ["ViewerHideOn"] = "You will no longer see other players' prefixes.",
@@ -568,6 +600,8 @@ namespace Oxide.Plugins
                 ["RangeCleared"] = "Your local viewing distance has been reset to the default.",
                 ["PrefixSet"] = "Your personal prefix has been saved: {0}",
                 ["ColorSet"] = "Your personal prefix color has been saved: {0}",
+                ["NicknameSet"] = "Your personal display name has been saved: {0}",
+                ["NicknameCleared"] = "Your personal display name has been reset to the default format.",
                 ["Cleared"] = "Your personal prefix settings have been cleared.",
                 ["NoRules"] = "No prefix rules are configured.",
                 ["RuleListHeader"] = "Prefix rules page {0}/{1}:",
@@ -597,6 +631,7 @@ namespace Oxide.Plugins
         {
             StartRefreshTimer();
             NextTick(RefreshAllPlayers);
+            RegisterPlaceholders();
             PrintBanner();
         }
 
@@ -666,6 +701,14 @@ namespace Oxide.Plugins
             SaveData();
         }
 
+        private void OnPluginLoaded(Plugin plugin)
+        {
+            if (plugin != null && plugin.Name == "PlaceholderAPI")
+            {
+                RegisterPlaceholders();
+            }
+        }
+
         #endregion
 
         #region Commands
@@ -680,6 +723,26 @@ namespace Oxide.Plugins
         private void CmdMTags(BasePlayer player, string command, string[] args)
         {
             HandleCommand(player, args);
+        }
+
+        // Separate mhide/mshow commands are used not only as a subcommand /mtags mhide, but also directly.
+        [ChatCommand("mhide")]
+        private void CmdMHide(BasePlayer player, string command, string[] args)
+        {
+            string[] combined = new string[(args?.Length ?? 0) + 1];
+            combined[0] = "mhide";
+            if (args != null && args.Length > 0)
+            {
+                Array.Copy(args, 0, combined, 1, args.Length);
+            }
+
+            HandleViewerHide(player, combined);
+        }
+
+        [ChatCommand("mshow")]
+        private void CmdMShow(BasePlayer player, string command, string[] args)
+        {
+            HandleViewerHide(player, new[] { "mshow", "off" });
         }
 
         [ConsoleCommand("magictags")]
@@ -736,6 +799,9 @@ namespace Oxide.Plugins
                         _config.General.TextHeightOffset,
                         _config.General.RequirePermissionToSeeTags,
                         _config.General.AllowPlayerRangeControl,
+                        _config.General.OverheadFieldOfView,
+                        _config.General.OverheadAspectRatio,
+                        string.IsNullOrEmpty(_config.General.DisplayNameFormat) ? "(hidden)" : _config.General.DisplayNameFormat,
                         GetRuleCount());
                     return;
 
@@ -765,6 +831,11 @@ namespace Oxide.Plugins
 
                 case "color":
                     HandlePersonalColor(player, args);
+                    return;
+
+                case "nick":
+                case "nickname":
+                    HandlePersonalDisplayName(player, args);
                     return;
 
                 case "clear":
@@ -989,6 +1060,52 @@ namespace Oxide.Plugins
             Reply(player, "ColorSet", color);
         }
 
+        private void HandlePersonalDisplayName(BasePlayer player, string[] args)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            if (!HasPermission(player, PermissionCustomNickname))
+            {
+                Reply(player, "NoPermission");
+                return;
+            }
+
+            if (args.Length < 2)
+            {
+                Reply(player, "InvalidUsage");
+                return;
+            }
+
+            PlayerSettings settings = GetPlayerSettings(player.userID);
+            string value = args[1].Trim().ToLowerInvariant();
+
+            if (value == "off" || value == "clear" || value == "reset" || value == "default")
+            {
+                settings.CustomDisplayName = string.Empty;
+                Stamp(settings, player.UserIDString);
+                SaveData();
+                RefreshAllPlayers();
+                Reply(player, "NicknameCleared");
+                return;
+            }
+
+            string nickname = EscapeRichText(string.Join(" ", args.Skip(1).ToArray()).Trim());
+            if (string.IsNullOrWhiteSpace(nickname))
+            {
+                Reply(player, "InvalidUsage");
+                return;
+            }
+
+            settings.CustomDisplayName = nickname;
+            Stamp(settings, player.UserIDString);
+            SaveData();
+            RefreshAllPlayers();
+            Reply(player, "NicknameSet", nickname);
+        }
+
         private void HandleClearPersonal(BasePlayer player)
         {
             if (player == null)
@@ -996,7 +1113,8 @@ namespace Oxide.Plugins
                 return;
             }
 
-            if (!HasPermission(player, PermissionCustomPrefix) && !HasPermission(player, PermissionCustomColor) && !HasPermission(player, PermissionHideOwn))
+            if (!HasPermission(player, PermissionCustomPrefix) && !HasPermission(player, PermissionCustomColor) &&
+                !HasPermission(player, PermissionHideOwn) && !HasPermission(player, PermissionCustomNickname))
             {
                 Reply(player, "NoPermission");
                 return;
@@ -1008,6 +1126,7 @@ namespace Oxide.Plugins
             settings.CustomViewDistance = -1f;
             settings.CustomPrefix = string.Empty;
             settings.CustomPrefixColor = string.Empty;
+            settings.CustomDisplayName = string.Empty;
             Stamp(settings, player.UserIDString);
             SaveData();
             RefreshAllPlayers();
@@ -1451,15 +1570,137 @@ namespace Oxide.Plugins
             }
         }
 
-        // Draws all the labels for a specific viewer
+        // Returns permission/group, the node that gave the player the current tag (for %magictags_perms% placeholder).
+        // For special cases (custom personal prefix/admin tag/default) returns a conditional tag instead of a real node.
+        private string ResolveAccessNode(BasePlayer target)
+        {
+            if (target == null)
+            {
+                return string.Empty;
+            }
+
+            PlayerSettings settings = GetPlayerSettings(target.userID);
+            if (settings.HideOwnTag)
+            {
+                return string.Empty;
+            }
+
+            if (!string.IsNullOrWhiteSpace(settings.CustomPrefix))
+            {
+                return "custom";
+            }
+
+            PrefixRule rule = FindMatchingRule(target);
+            if (rule != null)
+            {
+                return string.IsNullOrWhiteSpace(rule.Access) ? rule.Key : rule.Access;
+            }
+
+            if (target.IsAdmin && _config.AdminPrefix != null && _config.AdminPrefix.Enabled)
+            {
+                return "admin";
+            }
+
+            if (_config.DefaultPrefix != null && _config.DefaultPrefix.Enabled)
+            {
+                return "default";
+            }
+
+            return string.Empty;
+        }
+
+        // Resolves the display name of the player according to the format from the config ("Display Name Format").
+        // Priority: 1) Player's custom nickname (/mtags nick), 2) Template from the config with substitution
+        // %magictags_nickname%. If the final result is empty (including when the template in the config
+        // is intentionally left empty) — the nickname is considered hidden, and the calling code should simply not show it.
+        private string ResolveDisplayName(BasePlayer target)
+        {
+            if (target == null)
+            {
+                return string.Empty;
+            }
+
+            PlayerSettings settings = GetPlayerSettings(target.userID);
+            if (!string.IsNullOrWhiteSpace(settings.CustomDisplayName))
+            {
+                return settings.CustomDisplayName.Trim();
+            }
+
+            string format = _config != null && _config.General != null ? _config.General.DisplayNameFormat : DefaultDisplayNameFormat;
+            if (string.IsNullOrEmpty(format))
+            {
+                return string.Empty;
+            }
+
+            string realNickname = string.IsNullOrEmpty(target.displayName) ? string.Empty : target.displayName;
+            return format.Replace(DisplayNameNicknameToken, realNickname).Trim();
+        }
+
+        // The render entry point for a single viewer. For real admins (viewer.isAdmin is already true —
+        // no flag is faked to anyone here) we draw using ddraw.text: this is a native engine
+        // draw-call with accurate projection, without any approximation. For regular players — via CUI,
+        // because ddraw is not available for them without artificially replacing the admin flag, and this is just
+        // and there was an initial vulnerability. Here, PermissionView does not apply to the admins themselves — they always see everything.
         private void DrawTagsForViewer(BasePlayer viewer)
         {
             if (viewer == null || !viewer.IsConnected)
                 return;
 
             if (!ShouldRenderForViewer(viewer))
+            {
+                CuiHelper.DestroyUi(viewer, OverheadPanelName);
                 return;
+            }
 
+            if (viewer.IsAdmin)
+            {
+                    
+                CuiHelper.DestroyUi(viewer, OverheadPanelName);
+                DrawTagsViaDdraw(viewer);
+                return;
+            }
+
+            DrawTagsViaCui(viewer);
+        }
+
+        // Rendering for real admins: ddraw.text, exact position, no approximation.
+        private void DrawTagsViaDdraw(BasePlayer viewer)
+        {
+            var targets = BasePlayer.activePlayerList;
+            for (int i = 0; i < targets.Count; i++)
+            {
+                BasePlayer target = targets[i];
+                if (target == null || !target.IsConnected)
+                {
+                    continue;
+                }
+
+                PrefixVisual visual = ResolvePrefix(target);
+                if (visual == null || string.IsNullOrWhiteSpace(visual.Text))
+                {
+                    continue;
+                }
+
+                if (!ShouldShowToViewer(viewer, target, visual))
+                {
+                    continue;
+                }
+
+                Vector3 position = GetViewPosition(target) + new Vector3(0f, _config.General.TextHeightOffset, 0f);
+                Color drawColor;
+                if (!TryParseColor(visual.Color, out drawColor))
+                {
+                    drawColor = Color.white;
+                }
+
+                int size = ClampInt(visual.Size, 10, 24, 12);
+                viewer.SendConsoleCommand("ddraw.text", _config.General.TextLifetime, drawColor, position, EscapeRichText(visual.Text), size);
+            }
+        }
+
+        // Draws all the labels for a specific viewer via CUI
+        private void DrawTagsViaCui(BasePlayer viewer)
+        {
             var container = new CuiElementContainer();
             // Creating an empty container panel (without a background) - it will hold all the labels.
             container.Add(new CuiPanel
@@ -1541,7 +1782,14 @@ namespace Oxide.Plugins
             return true;
         }
 
-        // Manual projection of a world point onto the viewer's screen
+        // Manual projection of a world point onto the viewer's screen.
+        // The FOV/aspect are taken from the config (not the hardcode), because the players have a real vertical FOV
+        // in Rust, it differs from player to player (graphics slider.fov, usually 60-90, default 90) — server
+        // does not know the exact value of a specific client. It used to be 60° here with a real default
+        // the 90° angle of the engine, which caused the label to systematically move away from the player's native signature
+        // (she uses the client's real camera). The configuration in the config allows the admin to adjust
+        // projection for the typical settings of your audience, but 100% pixel-by-pixel accuracy
+        // it is unattainable without knowing the real FOV of each client — hence the residual, but minimal, drift.
         private bool TryWorldToScreen(BasePlayer viewer, Vector3 worldPosition, out Vector2 screenPoint)
         {
             screenPoint = Vector2.zero;
@@ -1562,9 +1810,12 @@ namespace Oxide.Plugins
                 return false;
             }
 
-            float tanHalfFov = Mathf.Tan(OverheadFovDegrees * Mathf.Deg2Rad * 0.5f);
+            float fovDegrees = _config != null && _config.General != null ? _config.General.OverheadFieldOfView : 90f;
+            float aspectRatio = _config != null && _config.General != null ? _config.General.OverheadAspectRatio : 1.7777778f;
 
-            float ndcX = local.x / (local.z * tanHalfFov * OverheadAspectRatio);
+            float tanHalfFov = Mathf.Tan(fovDegrees * Mathf.Deg2Rad * 0.5f);
+
+            float ndcX = local.x / (local.z * tanHalfFov * aspectRatio);
             float ndcY = local.y / (local.z * tanHalfFov);
 
             const float edgeMargin = 0.92f;
@@ -1721,6 +1972,7 @@ namespace Oxide.Plugins
             permission.RegisterPermission(PermissionHideOwn, this);
             permission.RegisterPermission(PermissionCustomPrefix, this);
             permission.RegisterPermission(PermissionCustomColor, this);
+            permission.RegisterPermission(PermissionCustomNickname, this);
             permission.RegisterPermission(PermissionManage, this);
             permission.RegisterPermission(PermissionReload, this);
         }
@@ -1783,6 +2035,103 @@ namespace Oxide.Plugins
             }
 
             return permission.UserHasPermission(player.UserIDString, permissionName);
+        }
+
+        #endregion
+
+        #region Placeholders
+
+        // Integration with the "Placeholder API" plugin: registers %magictags_xxx% placeholders,
+        // which can be used by third-party chat plugins (IQChat and the like).
+        //
+        // IMPORTANT: the "Placeholder API" in the Oxide/Rust ecosystem has different implementations with different
+        // the names of the hooks. The most common option used here is the "AddPlaceholder" hook
+        // with a signature (Plugin plugin, string placeholder, Func<BasePlayer, string> callback).
+        // If you have a different implementation (or IQChat itself does not pull placeholders from the placeholder API,
+        // and waiting for another hook to be called) — whistle, we'll fix the signature for a specific plugin.
+        // In case the format doesn't match, there's also a public GetMagicTagsPlaceholder hook below.,
+        // which any plugin can pull directly through the Interface.Oxide.CallHook.
+        private void RegisterPlaceholders()
+        {
+            if (PlaceholderAPI == null)
+            {
+                return;
+            }
+
+            try
+            {
+                PlaceholderAPI.Call("AddPlaceholder", this, "magictags_prefix", new Func<BasePlayer, string>(GetPlaceholderPrefixRich));
+                PlaceholderAPI.Call("AddPlaceholder", this, "magictags_text", new Func<BasePlayer, string>(GetPlaceholderPrefixText));
+                PlaceholderAPI.Call("AddPlaceholder", this, "magictags_size", new Func<BasePlayer, string>(GetPlaceholderPrefixSize));
+                PlaceholderAPI.Call("AddPlaceholder", this, "magictags_displayname", new Func<BasePlayer, string>(GetPlaceholderDisplayName));
+                PlaceholderAPI.Call("AddPlaceholder", this, "magictags_perms", new Func<BasePlayer, string>(GetPlaceholderAccessNode));
+            }
+            catch (Exception ex)
+            {
+                PrintWarning("Could not register placeholders with PlaceholderAPI: " + ex.Message);
+            }
+        }
+
+        private string GetPlaceholderPrefixRich(BasePlayer player)
+        {
+            PrefixVisual visual = ResolvePrefix(player);
+            if (visual == null || string.IsNullOrWhiteSpace(visual.Text))
+            {
+                return string.Empty;
+            }
+
+            string color = NormalizeHex(visual.Color, "#ffffff");
+            return "<color=" + color + ">" + EscapeRichText(visual.Text) + "</color>";
+        }
+
+        private string GetPlaceholderPrefixText(BasePlayer player)
+        {
+            PrefixVisual visual = ResolvePrefix(player);
+            return visual == null ? string.Empty : EscapeRichText(visual.Text);
+        }
+
+        private string GetPlaceholderPrefixSize(BasePlayer player)
+        {
+            PrefixVisual visual = ResolvePrefix(player);
+            return visual == null ? string.Empty : visual.Size.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private string GetPlaceholderDisplayName(BasePlayer player)
+        {
+            return EscapeRichText(ResolveDisplayName(player));
+        }
+
+        private string GetPlaceholderAccessNode(BasePlayer player)
+        {
+            return ResolveAccessNode(player);
+        }
+
+        // Public hook — any other plugin (IQChat, custom integrations and so on) can call this
+        // directly, without depending on a specific PlaceholderAPI implementation:
+        // Interface.Oxide.CallHook("GetMagicTagsPlaceholder", player, "prefix");
+        // key: prefix | text | size | displayname | perms
+        private string GetMagicTagsPlaceholder(BasePlayer player, string key)
+        {
+            if (player == null || string.IsNullOrWhiteSpace(key))
+            {
+                return string.Empty;
+            }
+
+            switch (key.Trim().ToLowerInvariant())
+            {
+                case "prefix":
+                    return GetPlaceholderPrefixRich(player);
+                case "text":
+                    return GetPlaceholderPrefixText(player);
+                case "size":
+                    return GetPlaceholderPrefixSize(player);
+                case "displayname":
+                    return GetPlaceholderDisplayName(player);
+                case "perms":
+                    return GetPlaceholderAccessNode(player);
+                default:
+                    return string.Empty;
+            }
         }
 
         #endregion
