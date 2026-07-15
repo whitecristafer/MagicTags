@@ -14,7 +14,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("MagicTags", "whitecristafer", "3.0.0")]
+    [Info("MagicTags", "whitecristafer", "3.0.1")]
     [Description("Configurable overhead prefixes with per-player visibility controls, dynamic rules, and clean chat formatting.")]
     public class MagicTags : RustPlugin
     {
@@ -682,7 +682,7 @@ namespace Oxide.Plugins
         private void CCmdMagicTags(ConsoleSystem.Arg arg)
         {
             BasePlayer player = arg.Player();
-            string[] args = arg.Args ?? new string[0];
+            string[] args = arg.Args?.Select(a => a.ToString()).ToArray() ?? new string[0]; 
             HandleCommand(player, args);
         }
 
@@ -1520,7 +1520,7 @@ namespace Oxide.Plugins
                 return;
             }
 
-            List<BasePlayer> viewers = BasePlayer.activePlayerList;
+            var viewers = BasePlayer.activePlayerList;
             for (int i = 0; i < viewers.Count; i++)
             {
                 BasePlayer viewer = viewers[i];
@@ -1547,7 +1547,7 @@ namespace Oxide.Plugins
 
             bool temporaryAdmin = EnsureTemporaryAdminFlag(viewer);
 
-            List<BasePlayer> targets = BasePlayer.activePlayerList;
+            var targets = BasePlayer.activePlayerList;
             for (int i = 0; i < targets.Count; i++)
             {
                 BasePlayer target = targets[i];
@@ -1573,7 +1573,7 @@ namespace Oxide.Plugins
                 return;
             }
 
-            List<BasePlayer> viewers = BasePlayer.activePlayerList;
+            var viewers = BasePlayer.activePlayerList;
             for (int i = 0; i < viewers.Count; i++)
             {
                 BasePlayer viewer = viewers[i];
@@ -2055,25 +2055,9 @@ namespace Oxide.Plugins
 
         private static string NormalizeHex(string value, string fallback, ref bool migrated)
         {
-            bool changed;
-            string result = NormalizeHex(value, fallback, out changed);
-            migrated |= changed;
-            return result;
-        }
-
-        private static string NormalizeHex(string value, string fallback)
-        {
-            bool changed;
-            return NormalizeHex(value, fallback, out changed);
-        }
-
-        private static string NormalizeHex(string value, string fallback, out bool changed)
-        {
-            changed = false;
-
             if (string.IsNullOrWhiteSpace(value))
             {
-                changed = true;
+                migrated = true;
                 return fallback;
             }
 
@@ -2081,21 +2065,27 @@ namespace Oxide.Plugins
             if (!trimmed.StartsWith("#"))
             {
                 trimmed = "#" + trimmed;
-                changed = true;
+                migrated = true;
             }
 
             if (!Regex.IsMatch(trimmed, "^#(?:[0-9a-fA-F]{3}){1,2}$"))
             {
-                changed = true;
+                migrated = true;
                 return fallback;
             }
 
             if (!string.Equals(trimmed, value, StringComparison.Ordinal))
             {
-                changed = true;
+                migrated = true;
             }
 
             return trimmed;
+        }
+
+        private static string NormalizeHex(string value, string fallback)
+        {
+            bool changed = false;
+            return NormalizeHex(value, fallback, ref changed);
         }
 
         private static bool TryParseColor(string value, out Color color)
@@ -2122,28 +2112,6 @@ namespace Oxide.Plugins
         private static string ChatPrefix()
         {
             return "<size=12><color=#cc66ff><b>MagicTags</b></color></size>";
-        }
-
-        private void RegisterDynamicRulePermissionIfNeeded(string access)
-        {
-            if (string.IsNullOrWhiteSpace(access))
-            {
-                return;
-            }
-
-            string normalized = access.Trim();
-
-            try
-            {
-                if (!permission.PermissionExists(normalized))
-                {
-                    permission.RegisterPermission(normalized, this);
-                }
-            }
-            catch
-            {
-                // Some rules intentionally point at groups, not permissions.
-            }
         }
 
         #endregion
