@@ -16,7 +16,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("MagicTags", "whitecristafer", "3.1.4-BETA")]
+    [Info("MagicTags", "whitecristafer", "3.2.1")]
     [Description("Configurable overhead prefixes with per-player visibility controls, dynamic rules, and clean chat formatting.")]
     public class MagicTags : RustPlugin
     {
@@ -41,7 +41,13 @@ namespace Oxide.Plugins
         private StoredData _data;
         private Timer _refreshTimer;
 
+        // Snapshot of live vanish states, rebuilt once per RefreshAllPlayers tick instead of asking
+        // CWEssentials once per (viewer, target) pair — avoids an O(players^2) cross-plugin call cost
+        // on top of the O(players^2) distance/visibility checks ShouldShowToViewer already does.
+        private Dictionary<ulong, bool> _vanishSnapshot;
+
         [PluginReference] private Plugin PlaceholderAPI;
+        [PluginReference] private Plugin CWEssentials;
 
         // CUI – we use the usual game UI, without the admin flag
         private const string OverheadPanelName = "MagicTags.Overhead";
@@ -629,6 +635,12 @@ namespace Oxide.Plugins
 
         private void OnServerInitialized()
         {
+            // [PluginReference] is normally wired automatically, but we double-check here explicitly:
+            // by OnServerInitialized every plugin should already be loaded, so if the field is still
+            // null at this point, something about the automatic wiring didn't happen for this instance
+            // (e.g. reference was captured before CWEssentials finished (re)loading).
+            EnsureCWEssentialsReference();
+
             StartRefreshTimer();
             NextTick(RefreshAllPlayers);
             RegisterPlaceholders();
@@ -645,6 +657,58 @@ namespace Oxide.Plugins
 
             ClearAllOverheadUi();
             SaveData();
+        }
+
+        // Fallback resolver used any time the [PluginReference] field might be stale or was never
+        // populated: looks the plugin up directly in the plugin manager by its Name.
+        private void EnsureCWEssentialsReference()
+        {
+            if (CWEssentials != null && CWEssentials.IsLoaded)
+            {
+                return;
+            }
+
+            CWEssentials = plugins.Find("CWEssentials");
+
+            if (CWEssentials == null)
+            {
+                DebugLog("CWEssentials not found — vanish-aware tag hiding is inactive until it loads.");
+            }
+        }
+
+        // Covers (re)loads that happen after this plugin started: whichever loads second, both ends
+        // up with a correct reference the moment CWEssentials becomes available. Also re-registers
+        // placeholders if PlaceholderAPI (re)loads.
+        private void OnPluginLoaded(Plugin plugin)
+        {
+            if (plugin == null)
+            {
+                return;
+            }
+
+            if (string.Equals(plugin.Name, "PlaceholderAPI", StringComparison.Ordinal))
+            {
+                RegisterPlaceholders();
+                return;
+            }
+
+            if (string.Equals(plugin.Name, "CWEssentials", StringComparison.Ordinal))
+            {
+                CWEssentials = plugin;
+                RefreshVanishSnapshot();
+                DebugLog("CWEssentials (re)loaded — vanish-aware tag hiding is now active.");
+            }
+        }
+
+        private void OnPluginUnloaded(Plugin plugin)
+        {
+            if (plugin == null || !string.Equals(plugin.Name, "CWEssentials", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            CWEssentials = null;
+            _vanishSnapshot = null;
         }
 
         private void OnPlayerConnected(BasePlayer player)
@@ -699,14 +763,6 @@ namespace Oxide.Plugins
         private void OnServerSave()
         {
             SaveData();
-        }
-
-        private void OnPluginLoaded(Plugin plugin)
-        {
-            if (plugin != null && plugin.Name == "PlaceholderAPI")
-            {
-                RegisterPlaceholders();
-            }
         }
 
         #endregion
@@ -887,6 +943,24 @@ namespace Oxide.Plugins
 
                     RefreshAllPlayers();
                     Reply(player, "Synced");
+                    return;
+
+                case "vanishlink":
+                    if (!HasPermission(player, PermissionManage))
+                    {
+                        Reply(player, "NoPermission");
+                        return;
+                    }
+
+                    EnsureCWEssentialsReference();
+                    string status = CWEssentials == null
+                        ? "not found (is CWEssentials loaded and named exactly 'CWEssentials'?)"
+                        : CWEssentials.IsLoaded ? "connected" : "found but reports IsLoaded = false";
+
+                    if (player != null)
+                        player.ChatMessage($"{ChatPrefix()} <color=#aaddff>CWEssentials link:</color> {status}");
+                    else
+                        Puts($"CWEssentials link: {status}");
                     return;
 
                 default:
@@ -1416,6 +1490,86 @@ namespace Oxide.Plugins
             return permission.UserHasPermission(viewer.UserIDString, PermissionView);
         }
 
+        // Asks CWEssentials directly whether this player is currently vanished. CWEssentials is an
+        // optional soft dependency — if it isn't loaded, or the call fails for any reason, nobody
+        // is treated as vanished and tag rendering behaves exactly as before its integration.
+        private bool IsVanishedDirect(BasePlayer target)
+        {
+            if (target == null || CWEssentials == null)
+            {
+                // Puts($"[MagicTags] IsVanishedDirect: CWEssentials null? {CWEssentials == null}");
+                return false;
+            }
+
+            object result = CWEssentials.CallHook("OnIsPlayerVanished", target);
+            bool vanished = result is bool b && b;
+            // Puts($"[MagicTags] IsVanishedDirect for {target.displayName}: result={result ?? "null"} ({result?.GetType()}), vanished={vanished}");
+            return vanished;
+        }
+
+        // Prefers the per-tick snapshot built in RefreshAllPlayers; falls back to a direct call for
+        // render paths triggered outside the main refresh loop (e.g. a single player join/spawn).
+        private bool IsTargetVanished(BasePlayer target)
+        {
+            if (target == null)
+            {
+                return false;
+            }
+
+            bool cached;
+            if (_vanishSnapshot != null && _vanishSnapshot.TryGetValue(target.userID, out cached))
+            {
+                return cached;
+            }
+
+            return IsVanishedDirect(target);
+        }
+        // private bool IsTargetVanished(BasePlayer target)
+        // {
+        //     return IsVanishedDirect(target);
+        // }
+
+        private void RefreshVanishSnapshot()
+        {
+            EnsureCWEssentialsReference();
+
+            if (CWEssentials == null)
+            {
+                _vanishSnapshot = null;
+                return;
+            }
+
+            var snapshot = new Dictionary<ulong, bool>();
+            var players = BasePlayer.activePlayerList;
+            for (int i = 0; i < players.Count; i++)
+            {
+                BasePlayer p = players[i];
+                if (p != null)
+                {
+                    snapshot[p.userID] = IsVanishedDirect(p);
+                }
+            }
+
+            _vanishSnapshot = snapshot;
+        }
+
+        // Fired by CWEssentials the instant vanish is toggled, so a vanished admin's overhead tag
+        // (CUI and ddraw alike) disappears immediately instead of waiting for the next refresh tick.
+        private void OnPlayerVanishToggled(BasePlayer player, bool vanished)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            if (_vanishSnapshot != null)
+            {
+                _vanishSnapshot[player.userID] = vanished;
+            }
+
+            RefreshTargetForAllViewers(player);
+        }
+
         private bool ShouldShowToViewer(BasePlayer viewer, BasePlayer target, PrefixVisual visual)
         {
             if (viewer == null || target == null || visual == null)
@@ -1424,6 +1578,14 @@ namespace Oxide.Plugins
             }
 
             if (!viewer.IsConnected || !target.IsConnected)
+            {
+                return false;
+            }
+
+            // A vanished player's overhead tag is exactly the kind of leak vanish is supposed to
+            // prevent — a floating [ADMIN]/[VIP] label (via CUI or ddraw.text) still pinpoints their
+            // position to anyone nearby, invisible model or not.
+            if (IsTargetVanished(target))
             {
                 return false;
             }
@@ -1897,6 +2059,8 @@ namespace Oxide.Plugins
             {
                 return;
             }
+
+            RefreshVanishSnapshot();
 
             var viewers = BasePlayer.activePlayerList;
             for (int i = 0; i < viewers.Count; i++)
